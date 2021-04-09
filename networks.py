@@ -4,8 +4,8 @@ from fastai.vision.gan import *
 import torch.nn as nn
 import torch.nn.functional as F
 
-from layers import (CondResBlockUp, DownsamplingOperation2d, ResBlockDown, ResBlockUp, 
-                    UpsamplingOperation2d)
+from layers import (CondResBlockUp, DownsamplingOperation2d, MiniBatchStdDev, ResBlockDown, 
+                    ResBlockUp, UpsamplingOperation2d)
 from torch_utils import add_sn
 
 
@@ -176,7 +176,8 @@ class SkipGenerator(nn.Module):
 
 def res_critic(in_size, n_channels, down_op, id_down_op, n_features=64, n_extra_res_blocks=1, 
                norm_type=NormType.Batch, n_extra_convs_by_res_block=0, sn=True, bn_1st=True,
-               downblock_cls=ResBlockDown, flatten_full=False, **kwargs):
+               downblock_cls=ResBlockDown, flatten_full=False, include_minibatch_std=False,
+               **kwargs):
     "A basic critic for images `n_channels` x `in_size` x `in_size`."
     layers = [down_op.get_layer(n_channels, n_features, norm_type=None, **kwargs)]
     cur_size, cur_ftrs = in_size//2, n_features
@@ -188,6 +189,9 @@ def res_critic(in_size, n_channels, down_op, id_down_op, n_features=64, n_extra_
                                     norm_type=norm_type, bn_1st=bn_1st, **kwargs))
         cur_ftrs *= 2 ; cur_size //= 2
     init = kwargs.get('init', nn.init.kaiming_normal_)
+    if include_minibatch_std: 
+        layers.append(MiniBatchStdDev())
+        cur_ftrs += 1
     #layers += [init_default(nn.Conv2d(cur_ftrs, 1, 4, padding=0, bias=False), init), Flatten()]    
     layers += [init_default(nn.Conv2d(cur_ftrs, 1, 4, padding=0), init), Flatten(full=flatten_full)]
     critic =  nn.Sequential(*layers)

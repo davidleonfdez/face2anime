@@ -5,12 +5,13 @@ import torch.nn as nn
 from typing import Callable, Type
 
 
-__all__ = ['ConcatPool2d', 'ConditionalBatchNorm2d', 'CondConvLayer',  'DownsamplingOperation2d', 
-           'AvgPoolHalfDownsamplingOp2d', 'ConcatPoolHalfDownsamplingOp2d', 'ConvHalfDownsamplingOp2d', 
-           'UpsamplingOperation2d', 'PixelShuffleUpsamplingOp2d', 'InterpConvUpsamplingOp2d', 
-           'CondInterpConvUpsamplingOp2d', 'ConvX2UpsamplingOp2d', 'CondConvX2UpsamplingOp2d', 
-           'MiniResBlock', 'ResBlockUp', 'RescaledResBlockUp', 'DenseBlockUp', 'CondResBlockUp', 
-           'ResBlockDown', 'RescaledResBlockDown', 'PseudoDenseBlockDown', 'DenseBlockDown']
+__all__ = ['ConcatPool2d', 'ConditionalBatchNorm2d', 'MiniBatchStdDev', 'CondConvLayer',  
+           'DownsamplingOperation2d', 'AvgPoolHalfDownsamplingOp2d', 'ConcatPoolHalfDownsamplingOp2d', 
+           'ConvHalfDownsamplingOp2d',  'UpsamplingOperation2d', 'PixelShuffleUpsamplingOp2d', 
+           'InterpConvUpsamplingOp2d', 'CondInterpConvUpsamplingOp2d', 'ConvX2UpsamplingOp2d', 
+           'CondConvX2UpsamplingOp2d', 'MiniResBlock', 'ResBlockUp', 'RescaledResBlockUp', 
+           'DenseBlockUp', 'CondResBlockUp', 'ResBlockDown', 'RescaledResBlockDown', 
+           'PseudoDenseBlockDown', 'DenseBlockDown']
 
 
 class ConcatPool2d(nn.Module):
@@ -42,6 +43,22 @@ class ConditionalBatchNorm2d(nn.Module):
         beta = self.bias(cond)
         out = gamma.view(-1, self.n_ftrs, 1, 1) * out + beta.view(-1, self.n_ftrs, 1, 1)
         return out
+
+
+class MiniBatchStdDev(nn.Module):
+    def __init__(self, group_sz=4, unbiased_std=False):
+        super().__init__()
+        self.group_sz = group_sz
+        self.unbiased_std = unbiased_std
+        
+    def forward(self, x):
+        bs, n_ch, h, w = x.shape
+        # We assume bs is divisible by self.group_sz
+        x_groups = x.view(-1, self.group_sz, n_ch, h, w)
+        stds_by_chw = x_groups.std(dim=1, unbiased=self.unbiased_std)
+        mean_std = stds_by_chw.mean(dim=[1, 2, 3], keepdim=True)
+        new_ftr_map = mean_std.unsqueeze(-1).repeat(1, self.group_sz, 1, h, w).view(bs, 1, h, w)
+        return torch.cat([x, new_ftr_map], axis=1)
 
 
 class CondConvLayer(nn.Module):

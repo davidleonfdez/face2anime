@@ -2,7 +2,8 @@ from fastai.vision.all import *
 import torch
 
 
-__all__ = ['random_epsilon_gp_sampler', 'GANGPCallback', 'R1GANGPCallback']
+__all__ = ['random_epsilon_gp_sampler', 'GANGPCallback', 'R1GANGPCallback', 
+           'repelling_reg_term', 'RepellingRegCallback']
 
 
 def random_epsilon_gp_sampler(real: torch.Tensor, fake: torch.Tensor) -> torch.Tensor:
@@ -59,3 +60,30 @@ class R1GANGPCallback(Callback):
             # Updated to fastai version 2.2.7: backward isn't called on learn.loss anymore, 
             # but on learn.loss_grad
             self.learn.loss_grad += self._gradient_penalty(real, self.weight)
+
+
+def repelling_reg_term(ftr_map, weight):
+    assert ftr_map.requires_grad
+    bs = ftr_map.shape[0]
+    flat_ftrs = ftr_map.view(bs, -1)
+    norms = flat_ftrs.norm(dim=1).unsqueeze(1)
+    # Cosine similarity between ftrs of any batch
+    # cos_sims[i, j] = cosine similarity between ftrs of batch `i` and ftrs of batch `j`
+    cos_sims = torch.mm(flat_ftrs, flat_ftrs.t()) / torch.mm(norms, norms.t())
+    # Substract bs to discard the diagonal, which is full of 1's
+    return weight * (cos_sims.square().sum() - bs) / (bs * (bs - 1))
+
+
+class RepellingRegCallback(Callback):
+    "Increases the G loss every iteration with a repelling regularization term."
+    def __init__(self, module, weight=1.):
+        self.hook = hook_output(module, detach=False)
+        self.weight = weight
+        self.history = []
+    
+    def after_loss(self):
+        if self.gan_trainer.gen_mode:
+            ftr_map = self.hook.stored
+            reg_term = repelling_reg_term(ftr_map, self.weight)
+            self.history.append(reg_term.detach().cpu())
+            self.learn.loss_grad += reg_term
