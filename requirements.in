@@ -1,0 +1,5 @@
+-f "https://download.pytorch.org/whl/torch_stable.html"
+fastai
+jupyter
+notebook
+jupyter_contrib_nbextensions
