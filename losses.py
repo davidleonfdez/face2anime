@@ -63,7 +63,6 @@ class R1GANGPCallback(Callback):
 
 
 def repelling_reg_term(ftr_map, weight):
-    assert ftr_map.requires_grad
     bs = ftr_map.shape[0]
     flat_ftrs = ftr_map.view(bs, -1)
     norms = flat_ftrs.norm(dim=1).unsqueeze(1)
@@ -82,8 +81,10 @@ class RepellingRegCallback(Callback):
         self.history = []
     
     def after_loss(self):
+        if not self.training: return
         if self.gan_trainer.gen_mode:
             ftr_map = self.hook.stored
+            assert ftr_map.requires_grad
             reg_term = repelling_reg_term(ftr_map, self.weight)
             self.history.append(reg_term.detach().cpu())
             self.learn.loss_grad += reg_term

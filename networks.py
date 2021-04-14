@@ -190,6 +190,8 @@ def res_critic(in_size, n_channels, down_op, id_down_op, n_features=64, n_extra_
         cur_ftrs *= 2 ; cur_size //= 2
     init = kwargs.get('init', nn.init.kaiming_normal_)
     if include_minibatch_std: 
+        # it may not make sense when using BN, although it, unlike BN, calculates a different
+        # stdev for any spatial position.
         layers.append(MiniBatchStdDev())
         cur_ftrs += 1
     #layers += [init_default(nn.Conv2d(cur_ftrs, 1, 4, padding=0, bias=False), init), Flatten()]    
