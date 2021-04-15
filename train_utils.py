@@ -15,24 +15,50 @@ class EMAAverager():
     
 
 class EMACallback(Callback):
-    def __init__(self, ema_model, orig_model, dl): 
+    def __init__(self, ema_model, orig_model, dl, update_buffers=True): 
         self.ema_model = ema_model
         self.orig_model = orig_model
         self.dl = dl
+        self.update_buffers = update_buffers
+        self.update_bn_pending = False
         
     def after_step(self):
         if self.gan_trainer.gen_mode:
-            self.ema_model.update_parameters(self.orig_model)
+            update_method = (self.ema_model.update_all if self.update_buffers
+                             else self.ema_model.update_parameters)
+            update_method(self.orig_model)
+            self.update_bn_pending = True
             
     def after_fit(self):
+        if not self.update_bn_pending: return
         torch.optim.swa_utils.update_bn(self.dl, self.ema_model)
-   
+        self.update_bn_pending = False
+
+
+class FullyAveragedModel(torch.optim.swa_utils.AveragedModel):
+    def _update_buffers(self, model):
+        for b_swa, b_model in zip(self.module.buffers(), model.buffers()):
+            device = b_swa.device
+            b_model_ = b_model.detach().to(device)
+            if self.n_averaged == 0:
+                b_swa.detach().copy_(b_model_)
+            else:
+                b_swa.detach().copy_(self.avg_fn(b_swa.detach(), b_model_,
+                                                 self.n_averaged.to(device)))                
+
+    def update_all(self, model):
+        # Buffers must be updated first, because this method relies on n_averaged,
+        # which is updated by super().update_parameters()
+        self._update_buffers(model)
+        self.update_parameters(model)
+
         
 def add_ema_to_gan_learner(gan_learner, dblock, ds_path, decay=0.999, update_bn_dl_bs=64):
     generator = gan_learner.model.generator
     ema_avg_fn = EMAAverager(decay=decay)
-    gan_learner.ema_model = torch.optim.swa_utils.AveragedModel(generator, avg_fn=ema_avg_fn)
+    gan_learner.ema_model = FullyAveragedModel(generator, avg_fn=ema_avg_fn)
     clean_dls = dblock.dataloaders(ds_path, path=ds_path, bs=update_bn_dl_bs)
+    gan_learner.ema_model.eval().to(clean_dls.device)
     gan_learner.add_cb(EMACallback(gan_learner.ema_model, generator, clean_dls.train))
 
 
