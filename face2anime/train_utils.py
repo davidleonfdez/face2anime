@@ -67,7 +67,7 @@ def custom_save_model(learner, filename, base_path='.'):
     if not isinstance(base_path, Path): raise Exception('Invalid base_path')
     file = join_path_file(filename, base_path/learner.model_dir, ext='.pth')
     save_model(file, learner.model, learner.opt)
-    if getattr(learn, 'ema_model', None) is not None:
+    if getattr(learner, 'ema_model', None) is not None:
         _save_ema_model(learner, base_path, filename)
     
 
