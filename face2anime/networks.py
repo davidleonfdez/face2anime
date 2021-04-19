@@ -4,9 +4,9 @@ from fastai.vision.gan import *
 import torch.nn as nn
 import torch.nn.functional as F
 
-from layers import (CondResBlockUp, DownsamplingOperation2d, MiniBatchStdDev, ResBlockDown, 
+from face2anime.layers import (CondResBlockUp, DownsamplingOperation2d, MiniBatchStdDev, ResBlockDown, 
                     ResBlockUp, UpsamplingOperation2d)
-from torch_utils import add_sn
+from face2anime.torch_utils import add_sn
 
 
 __all__ = ['custom_generator', 'res_generator', 'NoiseSplitStrategy', 'NoiseSplitEqualLeave1stOutStrategy', 
