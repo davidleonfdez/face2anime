@@ -40,12 +40,14 @@ class GANGPCallback(Callback):
 
 
 class R1GANGPCallback(Callback):
-    def __init__(self, weight=10.): 
+    def __init__(self, weight=10., critic=None): 
         self.weight = weight
+        self.critic = critic
         
     def _gradient_penalty(self, real, weight):
         x = real.detach().requires_grad_(True)
-        preds = self.model.critic(x).mean()
+        critic = self.critic or self.model.critic
+        preds = critic(x).mean()
 
         grads = torch.autograd.grad(outputs=preds, inputs=x, create_graph=True)[0]
         #return weight * (grads.norm()**2)  
