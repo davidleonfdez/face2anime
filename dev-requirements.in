@@ -1,0 +1,2 @@
+-c win-requirements.txt
+pytest
