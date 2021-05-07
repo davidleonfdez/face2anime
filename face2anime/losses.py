@@ -1,9 +1,11 @@
 from fastai.vision.all import *
+import pandas as pd
 import torch
 
 
 __all__ = ['random_epsilon_gp_sampler', 'GANGPCallback', 'R1GANGPCallback', 
-           'repelling_reg_term', 'RepellingRegCallback']
+           'repelling_reg_term', 'RepellingRegCallback', 'LossWrapper',
+           'CritPredsTracker']
 
 
 def random_epsilon_gp_sampler(real: torch.Tensor, fake: torch.Tensor) -> torch.Tensor:
@@ -90,3 +92,41 @@ class RepellingRegCallback(Callback):
             reg_term = repelling_reg_term(ftr_map, self.weight)
             self.history.append(reg_term.detach().cpu())
             self.learn.loss_grad += reg_term
+
+
+class LossWrapper():
+    def __init__(self, orig_loss, loss_args_interceptors=None):
+        self.orig_loss = orig_loss
+        self.loss_args_interceptors = loss_args_interceptors or []
+
+    def __call__(self, *args, **kwargs):
+        for interceptor in self.loss_args_interceptors:
+            interceptor(*args, **kwargs)
+        return self.orig_loss(*args, **kwargs)
+
+
+class CritPredsTracker():
+    def __init__(self, reduce_batch=False):
+        self.real_preds = None
+        self.fake_preds = None
+        self.reduce_batch = reduce_batch
+
+    def __call__(self, real_pred, fake_pred):
+        new_real_pred = (real_pred.mean(dim=0, keepdim=True) if self.reduce_batch else real_pred).detach()
+        new_fake_pred = (fake_pred.mean(dim=0, keepdim=True) if self.reduce_batch else fake_pred).detach()
+        self.real_preds = (new_real_pred.clone() if self.real_preds is None 
+                           else torch.cat([self.real_preds, new_real_pred]))
+        self.fake_preds = (new_fake_pred.clone() if self.fake_preds is None 
+                           else torch.cat([self.fake_preds, new_fake_pred]))
+        
+    def load_from_df(self, df, device):
+        self.real_preds = torch.Tensor(df['RealPreds']).to(device)
+        self.fake_preds = torch.Tensor(df['FakePreds']).to(device)
+        
+    def to_df(self):
+        return pd.DataFrame(dict(RealPreds=self.real_preds.cpu(),
+                                 FakePreds=self.fake_preds.cpu()))
+    
+    def reset(self):
+        self.real_preds = None
+        self.fake_preds = None

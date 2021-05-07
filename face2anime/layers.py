@@ -2,10 +2,10 @@ from abc import ABC, abstractmethod
 from fastai.vision.all import *
 import torch
 import torch.nn as nn
-from typing import Callable, Type
+from typing import Callable, List, Type
 
 
-__all__ = ['ConcatPool2d', 'ConditionalBatchNorm2d', 'MiniBatchStdDev', 'CondConvLayer',  
+__all__ = ['ConcatPool2d', 'ConditionalBatchNorm2d', 'MiniBatchStdDev', 'CondConvLayer', 'TransformsLayer',
            'DownsamplingOperation2d', 'AvgPoolHalfDownsamplingOp2d', 'ConcatPoolHalfDownsamplingOp2d', 
            'ConvHalfDownsamplingOp2d',  'UpsamplingOperation2d', 'PixelShuffleUpsamplingOp2d', 
            'InterpConvUpsamplingOp2d', 'CondInterpConvUpsamplingOp2d', 'ConvX2UpsamplingOp2d', 
@@ -59,6 +59,20 @@ class MiniBatchStdDev(nn.Module):
         mean_std = stds_by_chw.mean(dim=[1, 2, 3], keepdim=True)
         new_ftr_map = mean_std.unsqueeze(-1).repeat(1, self.group_sz, 1, h, w).view(bs, 1, h, w)
         return torch.cat([x, new_ftr_map], axis=1)
+
+
+class TransformsLayer(nn.Module):
+    def __init__(self, tfms:List[RandTransform]):
+        super().__init__()
+        self.tfms = tfms
+        
+    def forward(self, x):
+        # Needed to comply with type restrictions of fastai augmentations
+        if not isinstance(x, TensorImage):
+            x = TensorImage(x)  
+        for tfm in self.tfms: 
+            x = tfm(x, split_idx=0)
+        return x
 
 
 class CondConvLayer(nn.Module):
