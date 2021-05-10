@@ -1,14 +1,15 @@
 from face2anime.losses import CritPredsTracker
 from face2anime.transforms import AdaptiveAugmentsCallback, ADATransforms
-from fastai.vision.all import setup_aug_tfms, TensorImage
+from fastai.vision.all import PadMode, setup_aug_tfms, TensorImage
 import torch
 
 
 def test_ada_transforms():
-    ada_tfms = ADATransforms(1.)
+    pad_mode = PadMode.Border
+    ada_tfms = ADATransforms(1., pad_mode=pad_mode)
     composed_tfms = setup_aug_tfms(ada_tfms.to_array())
     t = TensorImage(torch.rand(5, 3, 8, 8))
-    
+
     p1_all_changed = True
     for tfm in composed_tfms:
         new_t = tfm(t.clone(), split_idx=0)
@@ -26,9 +27,16 @@ def test_ada_transforms():
             p0_none_changed = False
             break
         t = new_t
+
+    pad_mode_ok = True
+    for tfm in ada_tfms.to_array():
+        if getattr(tfm, 'pad_mode', pad_mode) != pad_mode:
+            pad_mode_ok = False
+            break
         
     assert p1_all_changed
     assert p0_none_changed
+    assert pad_mode_ok
 
 
 class FakeADATransforms():

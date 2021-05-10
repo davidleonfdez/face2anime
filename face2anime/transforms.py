@@ -53,22 +53,23 @@ class DifferentiableHue(HSVTfm):
 
 
 class ADATransforms():
-    def __init__(self, p):
-        self.flip = Flip(p=p)
+    def __init__(self, p, pad_mode=PadMode.Reflection):
+        self.flip = Flip(p=p, pad_mode=pad_mode)
         def draw_90_multiple(x): return (x.new_empty(x.size(0)).uniform_(1, 4) // 1) * 90
-        self.rotate_90x = Rotate(p=p, draw=draw_90_multiple)
+        self.rotate_90x = Rotate(p=p, draw=draw_90_multiple, pad_mode=pad_mode)
         # TODO: PadMode.Border could be better or less leaking????
-        self.int_translation = Translate(p=p, pad_mode=PadMode.Reflection)
-        self.iso_zoom = Zoom(p=p, draw=lambda x: 2 ** x.new_empty(x.size(0)).normal_(0, 0.2))
+        self.int_translation = Translate(p=p, pad_mode=pad_mode)
+        self.iso_zoom = Zoom(p=p, pad_mode=pad_mode, 
+                             draw=lambda x: 2 ** x.new_empty(x.size(0)).normal_(0, 0.2))
         p_rot = self._p_rot(p)
-        self.pre_rotate = Rotate(p=p_rot, max_deg=180)
+        self.pre_rotate = Rotate(p=p_rot, max_deg=180, pad_mode=pad_mode)
         # Here "StyleGAN 2 with limited data" applies anisotropic scaling but warp could be more interesting.
         # Anisotropic scaling would require an easy modification of fastai Zoom to use distinct strength for x and y
         # (new impl.)
-        self.warp = Warp(p=p)
-        self.post_rotate = Rotate(p=p_rot, max_deg=180)
+        self.warp = Warp(p=p, pad_mode=pad_mode)
+        self.post_rotate = Rotate(p=p_rot, max_deg=180, pad_mode=pad_mode)
         def draw_normal_0_0125(x): return x.new_empty((x.size(0), 2)).normal_(0, 0.125)
-        self.frac_translation = Translate(p=p, draw=draw_normal_0_0125)
+        self.frac_translation = Translate(p=p, draw=draw_normal_0_0125, pad_mode=pad_mode)
         self.brightness = Brightness(p=p, draw=lambda x: x.new_empty(x.size(0)).normal_(0.5, 0.1))
         self.contrast = Contrast(p=p, draw=lambda x: x.new_empty(x.size(0)).log_normal_(0, 0.5 * math.log(2)))
         self.hue = DifferentiableHue(p=p, max_hue=0.1)
