@@ -3,9 +3,11 @@ from fastai.vision.all import *
 from fastai.vision.gan import *
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils import spectral_norm
 
-from face2anime.layers import (CondResBlockUp, DownsamplingOperation2d, MiniBatchStdDev, ResBlockDown, 
-                    ResBlockUp, UpsamplingOperation2d)
+from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondResBlockUp, ConvHalfDownsamplingOp2d, 
+                               ConvX2UpsamplingOp2d, DownsamplingOperation2d, InterpConvUpsamplingOp2d,
+                               MiniBatchStdDev, ResBlockDown, ResBlockUp, UpsamplingOperation2d)
 from face2anime.torch_utils import add_sn
 
 
@@ -199,3 +201,46 @@ def res_critic(in_size, n_channels, down_op, id_down_op, n_features=64, n_extra_
     critic =  nn.Sequential(*layers)
     if sn: add_sn(critic)
     return critic
+
+
+def default_encoder(img_sz, n_ch, out_sz):
+    leakyReLU02 = partial(nn.LeakyReLU, negative_slope=0.2)
+    down_op = ConvHalfDownsamplingOp2d(ks=4, act_cls=leakyReLU02, bn_1st=False,
+                                       norm_type=NormType.Batch)
+    id_down_op = ConcatPoolHalfDownsamplingOp2d(conv_ks=3, act_cls=None, norm_type=None)
+    base_net = res_critic(img_sz, n_ch, down_op, id_down_op,
+                          n_extra_convs_by_res_block=0, act_cls=leakyReLU02,
+                          bn_1st=False, n_features=128)
+    
+    last_conv_rev_idx, last_conv = next((i, l) 
+                                        for i, l in enumerate(reversed(base_net)) 
+                                        if isinstance(l, (nn.Conv2d, ConvLayer)))
+    last_conv_idx = len(base_net) - 1 - last_conv_rev_idx
+    preserved_layers = base_net[:last_conv_idx]
+    new_last_conv = nn.Conv2d(last_conv.in_channels, out_sz, kernel_size=last_conv.kernel_size, 
+                              stride=last_conv.stride)
+    new_last_conv = spectral_norm(new_last_conv)
+
+    encoder = nn.Sequential(*preserved_layers, new_last_conv, Flatten())
+    return encoder
+
+
+def default_decoder(img_sz, n_ch, in_sz):
+    up_op = ConvX2UpsamplingOp2d(ks=4, act_cls=nn.ReLU, bn_1st=False)
+    id_up_op = InterpConvUpsamplingOp2d(ks=3, act_cls=None)
+    decoder = res_generator(img_sz, n_ch, up_op, id_up_op, in_sz=in_sz, bn_1st=False, 
+                            n_features=128)
+    return decoder
+
+
+def img2img_generator(in_sz, n_ch, latent_sz=100, encoder=None, decoder=None, mid_mlp_depth=0):
+    if encoder is None: encoder = default_encoder(in_sz, n_ch, latent_sz)
+    if decoder is None: decoder = default_decoder(in_sz, n_ch, latent_sz)
+    
+    layers = [encoder, decoder]
+    if mid_mlp_depth > 0: 
+        mlp_ls = [LinBnDrop(latent_sz, latent_sz, act=nn.ReLU(), lin_first=True) 
+                  for _ in range(mid_mlp_depth)]
+        layers[1:1] = mlp_ls
+        # TODO: Add SN to linear??
+    return nn.Sequential(*layers)

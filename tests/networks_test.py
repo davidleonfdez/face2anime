@@ -1,9 +1,9 @@
 from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondConvX2UpsamplingOp2d, 
                                CondInterpConvUpsamplingOp2d, ConvHalfDownsamplingOp2d, 
                                ConvX2UpsamplingOp2d, InterpConvUpsamplingOp2d)
-from face2anime.networks import (CondResGenerator, custom_generator, NoiseSplitDontSplitStrategy,
-                                 NoiseSplitEqualLeave1stOutStrategy, res_critic, res_generator, 
-                                 SkipGenerator)
+from face2anime.networks import (CondResGenerator, custom_generator, img2img_generator,
+                                 NoiseSplitDontSplitStrategy, NoiseSplitEqualLeave1stOutStrategy, 
+                                 res_critic, res_generator, SkipGenerator)
 from face2anime.torch_utils import every_conv_has_sn
 import pytest
 from random import randint
@@ -101,3 +101,20 @@ def test_res_critic(in_sz, n_ch, n_ftrs):
 
     assert every_conv_has_sn(crit)
     assert out.size() == torch.Size([bs, 1])
+
+
+@pytest.mark.parametrize("in_sz", [32, 64])
+@pytest.mark.parametrize("n_ch", [1, 3])
+@pytest.mark.parametrize("latent_sz", [50, 100])
+@pytest.mark.parametrize("mid_mlp_depth", [0, 2])
+def test_img2img_generator(in_sz, n_ch, latent_sz, mid_mlp_depth):
+    g = img2img_generator(in_sz, n_ch, latent_sz=latent_sz, mid_mlp_depth=mid_mlp_depth)
+
+    bs = randint(1, 5)
+    # Needed because BN expects more than 1 value per channel when training
+    if bs == 1: g.eval()
+    in_t = torch.rand(bs, n_ch, in_sz, in_sz)
+    out = g(in_t)
+
+    assert every_conv_has_sn(g)
+    assert out.size() == in_t.size()

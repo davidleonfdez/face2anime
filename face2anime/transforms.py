@@ -57,7 +57,6 @@ class ADATransforms():
         self.flip = Flip(p=p, pad_mode=pad_mode)
         def draw_90_multiple(x): return (x.new_empty(x.size(0)).uniform_(1, 4) // 1) * 90
         self.rotate_90x = Rotate(p=p, draw=draw_90_multiple, pad_mode=pad_mode)
-        # TODO: PadMode.Border could be better or less leaking????
         self.int_translation = Translate(p=p, pad_mode=pad_mode)
         self.iso_zoom = Zoom(p=p, pad_mode=pad_mode, 
                              draw=lambda x: 2 ** x.new_empty(x.size(0)).normal_(0, 0.2))
