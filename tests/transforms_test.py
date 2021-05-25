@@ -6,9 +6,10 @@ import torch
 
 def test_ada_transforms():
     pad_mode = PadMode.Border
-    ada_tfms = ADATransforms(1., pad_mode=pad_mode)
+    img_sz = (8, 8)
+    ada_tfms = ADATransforms(1., img_sz, pad_mode=pad_mode)
     composed_tfms = setup_aug_tfms(ada_tfms.to_array())
-    t = TensorImage(torch.rand(5, 3, 8, 8))
+    t = TensorImage(torch.rand(5, 3, *img_sz))
 
     p1_all_changed = True
     for tfm in composed_tfms:
@@ -19,7 +20,7 @@ def test_ada_transforms():
         t = new_t
     
     ada_tfms.update_ps(0.)
-    t = TensorImage(torch.rand(5, 3, 8, 8))
+    t = TensorImage(torch.rand(5, 3, *img_sz))
     p0_none_changed = True
     for tfm in composed_tfms:
         new_t = tfm(t.clone(), split_idx=0)

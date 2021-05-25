@@ -3,6 +3,7 @@ from fastai.vision.augment import _draw_mask, AffineCoordTfm, HSVTfm
 import math
 import torch
 from torch import zeros_like as t0, ones_like as t1
+from typing import Tuple
 
 
 __all__ = ['Translate', 'DifferentiableHue', 'ADATransforms', 'AdaptiveAugmentsCallback']
@@ -10,7 +11,6 @@ __all__ = ['Translate', 'DifferentiableHue', 'ADATransforms', 'AdaptiveAugmentsC
 
 def translate_mat(x, p=0.5, draw=None, batch=False):
     "Return a random translation matrix"
-    #def _def_draw(x): return torch.distributions.Uniform(-0.125, 0.125).sample([x.size(0), 2])
     def _def_draw(x): return x.new_empty((x.size(0), 2)).uniform_(-0.125, 0.125)
     mask = _draw_mask(x, _def_draw, draw=draw, p=p, batch=batch)
     bias_x = mask[:, 0]
@@ -53,11 +53,16 @@ class DifferentiableHue(HSVTfm):
 
 
 class ADATransforms():
-    def __init__(self, p, pad_mode=PadMode.Reflection):
-        self.flip = Flip(p=p, pad_mode=pad_mode)
-        def draw_90_multiple(x): return (x.new_empty(x.size(0)).uniform_(1, 4) // 1) * 90
+    def __init__(self, p, img_sz:Tuple, pad_mode=PadMode.Reflection):
+        self.flip = Flip(p=self._p_flip(p), pad_mode=pad_mode)
+        def draw_90_multiple(x): return (x.new_empty(x.size(0)).uniform_(0, 4) // 1) * 90
         self.rotate_90x = Rotate(p=p, draw=draw_90_multiple, pad_mode=pad_mode)
-        self.int_translation = Translate(p=p, pad_mode=pad_mode)
+        w, h = img_sz
+        def int_trans_draw(x): return torch.cat([
+            torch.round(x.new_empty((x.size(0), 1)).uniform_(-w/8, w/8)) / w,
+            torch.round(x.new_empty((x.size(0), 1)).uniform_(-h/8, h/8)) / h
+        ], axis=-1)
+        self.int_translation = Translate(p=p, pad_mode=pad_mode, draw=int_trans_draw, align_corners=False)
         self.iso_zoom = Zoom(p=p, pad_mode=pad_mode, 
                              draw=lambda x: 2 ** x.new_empty(x.size(0)).normal_(0, 0.2))
         p_rot = self._p_rot(p)
@@ -79,6 +84,9 @@ class ADATransforms():
         
     def _p_rot(self, p):
         return p * math.sqrt(1 - p)
+
+    def _p_flip(self, p):
+        return p * 0.5
         
     def to_array(self):
         return [
@@ -98,8 +106,8 @@ class ADATransforms():
         ]
     
     def update_ps(self, p):
-        # This is horribly implementation dependant, but not easy to avoid
-        self.flip.aff_fs[0].keywords['p'] = p
+        # This is heavily implementation dependant, but it's covered by a test.
+        self.flip.aff_fs[0].keywords['p'] = self._p_flip(p)
         self.rotate_90x.aff_fs[0].keywords['p'] = p
         self.int_translation.aff_fs[0].keywords['p'] = p
         self.iso_zoom.aff_fs[0].keywords['p'] = p
