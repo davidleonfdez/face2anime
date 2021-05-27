@@ -2,16 +2,17 @@ from abc import ABC, abstractmethod
 from fastai.vision.all import *
 import torch
 import torch.nn as nn
+from torch.nn.utils import spectral_norm, weight_norm
 from typing import Callable, List, Type
 
 
 __all__ = ['ConcatPool2d', 'ConditionalBatchNorm2d', 'MiniBatchStdDev', 'CondConvLayer', 'TransformsLayer',
-           'DownsamplingOperation2d', 'AvgPoolHalfDownsamplingOp2d', 'ConcatPoolHalfDownsamplingOp2d', 
-           'ConvHalfDownsamplingOp2d',  'UpsamplingOperation2d', 'PixelShuffleUpsamplingOp2d', 
-           'InterpConvUpsamplingOp2d', 'CondInterpConvUpsamplingOp2d', 'ConvX2UpsamplingOp2d', 
-           'CondConvX2UpsamplingOp2d', 'MiniResBlock', 'ResBlockUp', 'RescaledResBlockUp', 
-           'DenseBlockUp', 'CondResBlockUp', 'ResBlockDown', 'RescaledResBlockDown', 
-           'PseudoDenseBlockDown', 'DenseBlockDown']
+           'ParamRemover', 'DownsamplingOperation2d', 'AvgPoolHalfDownsamplingOp2d', 
+           'ConcatPoolHalfDownsamplingOp2d', 'ConvHalfDownsamplingOp2d',  'UpsamplingOperation2d', 
+           'PixelShuffleUpsamplingOp2d', 'InterpConvUpsamplingOp2d', 'CondInterpConvUpsamplingOp2d', 
+           'ConvX2UpsamplingOp2d', 'CondConvX2UpsamplingOp2d', 'ParamRemoverUpsamplingOp2d', 'MiniResBlock', 
+           'ResBlockUp', 'RescaledResBlockUp', 'DenseBlockUp', 'CondResBlockUp', 'ResBlockDown', 
+           'RescaledResBlockDown', 'PseudoDenseBlockDown', 'DenseBlockDown']
 
 
 class ConcatPool2d(nn.Module):
@@ -39,6 +40,28 @@ class ConditionalBatchNorm2d(nn.Module):
 
     def forward(self, x, cond):
         out = self.bn(x)
+        gamma = 1 + self.gain(cond)
+        beta = self.bias(cond)
+        out = gamma.view(-1, self.n_ftrs, 1, 1) * out + beta.view(-1, self.n_ftrs, 1, 1)
+        return out
+
+
+class ConditionalInstanceNorm2d(nn.Module):
+    """IN layer whose gain (gamma) and bias (beta) params also depend on an external condition vector."""
+    def __init__(self, n_ftrs:int, cond_sz:int, gain_init=None, bias_init=None):
+        super().__init__()
+        self.n_ftrs = n_ftrs
+        # Don't learn beta and gamma inside self.inn (fix to irrelevance: beta=1, gamma=0)
+        self.inn = nn.InstanceNorm2d(n_ftrs, affine=False)
+        self.gain = nn.Linear(cond_sz, n_ftrs, bias=False)
+        self.bias = nn.Linear(cond_sz, n_ftrs, bias=False)        
+        if gain_init is None: gain_init = nn.init.zeros_
+        if bias_init is None: bias_init = nn.init.zeros_
+        init_default(self.gain, gain_init)
+        init_default(self.bias, bias_init)
+
+    def forward(self, x, cond):
+        out = self.inn(x)
         gamma = 1 + self.gain(cond)
         beta = self.bias(cond)
         out = gamma.view(-1, self.n_ftrs, 1, 1) * out + beta.view(-1, self.n_ftrs, 1, 1)
@@ -75,6 +98,15 @@ class TransformsLayer(nn.Module):
         return x
 
 
+class ParamRemover(nn.Module):
+    def __init__(self, module):
+        super().__init__()
+        self.module = module
+        
+    def forward(self, *args):
+        return self.module(*args[:-1])
+
+
 class CondConvLayer(nn.Module):
     "Create a sequence of convolutional (`ni` to `nf`), ReLU (if `use_activ`) and conditional `norm_type` layers."
     @delegates(nn.Conv2d)
@@ -97,8 +129,7 @@ class CondConvLayer(nn.Module):
         act_bn = []
         if act is not None: act_bn.append(act)
         if bn: act_bn.append(ConditionalBatchNorm2d(nf, cond_sz))
-        # TODO: implement Conditional/AdaptiveInstanceNorm
-        if inn: act_bn.append(InstanceNorm(nf, norm_type=norm_type, ndim=ndim))
+        if inn: act_bn.append(ConditionalInstanceNorm2d(nf, cond_sz))
         if bn_1st: act_bn.reverse()
         self.layers += act_bn
         if xtra_begin: self.layers.insert(0, xtra_begin)
@@ -106,7 +137,7 @@ class CondConvLayer(nn.Module):
     
     def forward(self, x, cond):
         for l in self.layers:
-            if isinstance(l, ConditionalBatchNorm2d):
+            if isinstance(l, (ConditionalBatchNorm2d, ConditionalInstanceNorm2d)):
                 x = l(x, cond)
             else:
                 x = l(x)
@@ -293,6 +324,14 @@ class CondConvX2UpsamplingOp2d(UpsamplingOperation2d):
                              transpose=True, bias=False, output_padding=self.output_padding, 
                              bn_1st=self.bn_1st, **op_kwargs)
         return conv
+
+
+class ParamRemoverUpsamplingOp2d(UpsamplingOperation2d):
+    def __init__(self, wrapped_up_op):
+        self.wrapped_up_op = wrapped_up_op
+        
+    def get_layer(self, in_ftrs:int=None, out_ftrs:int=None, **op_kwargs) -> nn.Module:
+        return ParamRemover(self.wrapped_up_op.get_layer(in_ftrs, out_ftrs, **op_kwargs))
 
 
 class MiniResBlock(nn.Module):

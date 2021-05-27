@@ -5,6 +5,7 @@ from face2anime.networks import (CondResGenerator, custom_generator, img2img_gen
                                  NoiseSplitDontSplitStrategy, NoiseSplitEqualLeave1stOutStrategy, 
                                  res_critic, res_generator, SkipGenerator)
 from face2anime.torch_utils import every_conv_has_sn
+from fastai.vision.all import NormType
 import pytest
 from random import randint
 import torch
@@ -56,9 +57,12 @@ def test_cond_res_generator(out_sz, n_ch, in_sz, n_ftrs):
     noise_split_strat = NoiseSplitEqualLeave1stOutStrategy()
     cond_sz = noise_split_strat.calc_cond_sz(in_sz, n_noise_splits)
     g_split_equal_z = CondResGenerator(*common_args,
-                                       CondConvX2UpsamplingOp2d(cond_sz),
-                                       CondInterpConvUpsamplingOp2d(cond_sz),
+                                       CondConvX2UpsamplingOp2d(cond_sz, 
+                                                                norm_type=NormType.Instance),
+                                       CondInterpConvUpsamplingOp2d(cond_sz,
+                                                                    norm_type=NormType.Instance),
                                        noise_split_strat,
+                                       norm_type=NormType.Instance,
                                        **kwargs)
 
     noise_split_strat = NoiseSplitDontSplitStrategy()
