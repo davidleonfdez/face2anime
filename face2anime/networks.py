@@ -5,14 +5,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils import spectral_norm
 
-from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondResBlockUp, ConvHalfDownsamplingOp2d, 
-                               ConvX2UpsamplingOp2d, DownsamplingOperation2d, InterpConvUpsamplingOp2d,
-                               MiniBatchStdDev, ResBlockDown, ResBlockUp, UpsamplingOperation2d)
+from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondConvX2UpsamplingOp2d, CondResBlockUp, 
+                               ConvHalfDownsamplingOp2d, ConvX2UpsamplingOp2d, DownsamplingOperation2d, 
+                               InterpConvUpsamplingOp2d, MiniBatchStdDev, ParamRemoverUpsamplingOp2d, 
+                               ResBlockDown, ResBlockUp, UpsamplingOperation2d)
 from face2anime.torch_utils import add_sn
 
 
 __all__ = ['custom_generator', 'res_generator', 'NoiseSplitStrategy', 'NoiseSplitEqualLeave1stOutStrategy', 
-           'NoiseSplitDontSplitStrategy', 'CondResGenerator', 'SkipGenerator', 'res_critic']
+           'NoiseSplitDontSplitStrategy', 'CondResGenerator', 'SkipGenerator', 'res_critic', 'cond_decoder',
+           'img2img_generator']
 
 
 def custom_generator(out_size, n_channels, up_op:UpsamplingOperation2d, in_sz=100, 
@@ -203,33 +205,33 @@ def res_critic(in_size, n_channels, down_op, id_down_op, n_features=64, n_extra_
     return critic
 
 
-def default_encoder(img_sz, n_ch, out_sz):
+def default_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
     leakyReLU02 = partial(nn.LeakyReLU, negative_slope=0.2)
     down_op = ConvHalfDownsamplingOp2d(ks=4, act_cls=leakyReLU02, bn_1st=False,
-                                       norm_type=NormType.Batch)
+                                       norm_type=norm_type)
     id_down_op = ConcatPoolHalfDownsamplingOp2d(conv_ks=3, act_cls=None, norm_type=None)
     base_net = res_critic(img_sz, n_ch, down_op, id_down_op,
                           n_extra_convs_by_res_block=0, act_cls=leakyReLU02,
-                          bn_1st=False, n_features=128)
+                          bn_1st=False, n_features=128, norm_type=norm_type)
     
     last_conv_rev_idx, last_conv = next((i, l) 
                                         for i, l in enumerate(reversed(base_net)) 
                                         if isinstance(l, (nn.Conv2d, ConvLayer)))
     last_conv_idx = len(base_net) - 1 - last_conv_rev_idx
     preserved_layers = base_net[:last_conv_idx]
-    new_last_conv = nn.Conv2d(last_conv.in_channels, out_sz, kernel_size=last_conv.kernel_size, 
-                              stride=last_conv.stride)
+    new_last_conv = init_default(nn.Conv2d(last_conv.in_channels, out_sz, kernel_size=last_conv.kernel_size, 
+                                           stride=last_conv.stride))
     new_last_conv = spectral_norm(new_last_conv)
 
     encoder = nn.Sequential(*preserved_layers, new_last_conv, Flatten())
     return encoder
 
 
-def default_decoder(img_sz, n_ch, in_sz):
-    up_op = ConvX2UpsamplingOp2d(ks=4, act_cls=nn.ReLU, bn_1st=False)
-    id_up_op = InterpConvUpsamplingOp2d(ks=3, act_cls=None)
+def default_decoder(img_sz, n_ch, in_sz, norm_type=NormType.Instance):
+    up_op = ConvX2UpsamplingOp2d(ks=4, act_cls=nn.ReLU, bn_1st=False, norm_type=norm_type)
+    id_up_op = InterpConvUpsamplingOp2d(ks=3, act_cls=None, norm_type=norm_type)
     decoder = res_generator(img_sz, n_ch, up_op, id_up_op, in_sz=in_sz, bn_1st=False, 
-                            n_features=128)
+                            n_features=128, norm_type=norm_type)
     return decoder
 
 
