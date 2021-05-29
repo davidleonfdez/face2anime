@@ -1,6 +1,7 @@
 from face2anime.losses import CritPredsTracker
 from face2anime.transforms import AdaptiveAugmentsCallback, ADATransforms
 from fastai.vision.all import PadMode, setup_aug_tfms, TensorImage
+from testing_fakes import DummyObject
 import torch
 
 
@@ -43,10 +44,6 @@ def test_ada_transforms():
 class FakeADATransforms():
     def __init__(self, p): self.p = p
     def update_ps(self, p): self.p = p
-        
-
-class DummyObject(object):
-    "Simple object useful for setting attributes dinamically."
 
 
 def test_adaptive_augments_cb():

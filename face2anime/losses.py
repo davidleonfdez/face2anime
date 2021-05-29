@@ -1,11 +1,12 @@
+from face2anime.misc import FeaturesCalculator
 from fastai.vision.all import *
 import pandas as pd
 import torch
 
 
 __all__ = ['random_epsilon_gp_sampler', 'GANGPCallback', 'R1GANGPCallback', 
-           'repelling_reg_term', 'RepellingRegCallback', 'LossWrapper',
-           'CritPredsTracker']
+           'repelling_reg_term', 'RepellingRegCallback', 'ContentLossCallback',
+           'LossWrapper', 'CritPredsTracker']
 
 
 def random_epsilon_gp_sampler(real: torch.Tensor, fake: torch.Tensor) -> torch.Tensor:
@@ -92,6 +93,26 @@ class RepellingRegCallback(Callback):
             reg_term = repelling_reg_term(ftr_map, self.weight)
             self.history.append(reg_term.detach().cpu())
             self.learn.loss_grad += reg_term
+
+
+class ContentLossCallback(Callback):
+    def __init__(self, weight=1., ftrs_calc=None, device=None, content_loss_func=None):
+        self.weight = weight
+        self.content_loss_func = (nn.MSELoss(reduction='mean') if content_loss_func is None
+                                  else content_loss_func)
+        if ftrs_calc is None:
+            vgg_content_layers_idx = [22]
+            ftrs_calc = FeaturesCalculator([], vgg_content_layers_idx, device=device)
+        self.ftrs_calc = ftrs_calc
+        
+    def after_loss(self):
+        if self.gan_trainer.gen_mode:
+            input_content_ftrs = self.ftrs_calc.calc_content(self.x)[0]
+            output_content_ftrs = self.ftrs_calc.calc_content(self.pred)[0]
+            loss_val = self.weight * self.content_loss_func(output_content_ftrs, input_content_ftrs)
+            # Store result inside learn.loss_func to make it visible to metrics display
+            self.learn.loss_func.content_loss = loss_val
+            self.learn.loss_grad += loss_val
 
 
 class LossWrapper():

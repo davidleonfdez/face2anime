@@ -6,7 +6,11 @@ from torch import zeros_like as t0, ones_like as t1
 from typing import Tuple
 
 
-__all__ = ['Translate', 'DifferentiableHue', 'ADATransforms', 'AdaptiveAugmentsCallback']
+__all__ = ['normalize_imagenet_tf', 'Translate', 'DifferentiableHue', 'ADATransforms', 
+           'AdaptiveAugmentsCallback']
+
+
+normalize_imagenet_tf = Normalize.from_stats(*imagenet_stats)
 
 
 def translate_mat(x, p=0.5, draw=None, batch=False):

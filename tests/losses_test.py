@@ -1,5 +1,32 @@
-from face2anime.losses import CritPredsTracker, LossWrapper
+from face2anime.losses import ContentLossCallback, CritPredsTracker, LossWrapper
+import math
+from testing_fakes import DummyObject
 import torch
+
+
+class FakeFeaturesCalculator:
+    def __init__(self, *args, **kwargs): pass
+    def calc_content(self, t): return t.mean(axis=1)
+
+
+def test_content_loss_callback():
+    ftrs_calc=FakeFeaturesCalculator()
+    cb = ContentLossCallback(ftrs_calc=FakeFeaturesCalculator())
+    cb.x = torch.Tensor([[1., 2, 3]])
+    cb.pred = torch.Tensor([[3, 3.5, 4]])
+    cb.learn = DummyObject()
+    cb.learn.loss_grad = 0.
+    cb.learn.loss_func = DummyObject()
+    cb.gan_trainer = DummyObject()
+    cb.gan_trainer.gen_mode = False
+    cb.after_loss()
+    loss_crit_mode = cb.learn.loss_grad
+    cb.gan_trainer.gen_mode = True
+    cb.after_loss()
+    loss_gen_mode = cb.learn.loss_grad
+
+    assert math.isclose(loss_crit_mode, 0.)
+    assert math.isclose(loss_gen_mode, 2.25)
 
 
 class FakeLossArgsInterceptor:

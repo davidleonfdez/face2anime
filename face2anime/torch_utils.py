@@ -4,7 +4,7 @@ from torch.nn.utils.spectral_norm import SpectralNorm
 
 
 __all__ = ['is_conv', 'has_sn_hook', 'every_conv_has_sn', 'get_mean_weights', 
-           'add_sn']
+           'add_sn', 'set_sn_to_every_conv']
 
 
 conv_types = [nn.Conv1d, nn.Conv2d, nn.Conv3d,
@@ -45,3 +45,22 @@ def add_sn(m:nn.Module):
         add_sn(l)
     for i in idxs_to_edit:
         m[i] = spectral_norm(m[i])
+
+
+def set_sn_to_every_conv(m:nn.Module):
+    if isinstance(m, nn.Sequential) or isinstance(m, nn.ModuleList):
+        idxs_to_modify = []
+        for i in range(len(m)):
+            if is_conv(m[i]) and not has_sn_hook(m[i]):
+                idxs_to_modify.append(i)
+            elif len(list(m[i].children())) > 0:
+                set_sn_to_every_conv(m[i])
+        for i in idxs_to_modify:
+            m[i] = spectral_norm(m[i])        
+    elif len(list(m.children())) > 0:
+        for attr_name in dir(m):
+            attr_value = getattr(m, attr_name)
+            if is_conv(attr_value) and not has_sn_hook(attr_value):
+                setattr(m, attr_name, spectral_norm(attr_value))
+            elif isinstance(attr_value, nn.Module) and (len(list(attr_value.children())) > 0):
+                set_sn_to_every_conv(attr_value)

@@ -1,3 +1,5 @@
+from face2anime.layers import ConvX2UpsamplingOp2d
+from face2anime.networks import SkipGenerator
 from face2anime.torch_utils import *
 import torch.nn as nn
 from torch.nn.utils import spectral_norm
@@ -99,5 +101,13 @@ def test_add_sn():
         nn.Sequential(nn.Conv2d(1, 1, 1), nn.BatchNorm2d(1))
     )
     add_sn(net)
+
+    assert every_conv_has_sn(net)
+
+
+def test_set_sn_to_every_conv():
+    net = SkipGenerator(32, 3, ConvX2UpsamplingOp2d(), ConvX2UpsamplingOp2d(),
+                        sn=False)
+    set_sn_to_every_conv(net)
 
     assert every_conv_has_sn(net)
