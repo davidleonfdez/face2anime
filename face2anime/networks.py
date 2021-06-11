@@ -13,8 +13,8 @@ from face2anime.torch_utils import add_sn
 
 
 __all__ = ['custom_generator', 'res_generator', 'NoiseSplitStrategy', 'NoiseSplitEqualLeave1stOutStrategy', 
-           'NoiseSplitDontSplitStrategy', 'CondResGenerator', 'SkipGenerator', 'res_critic', 'cond_decoder',
-           'img2img_generator']
+           'NoiseSplitDontSplitStrategy', 'CondResGenerator', 'SkipGenerator', 'CycleGenerator', 'res_critic', 
+           'CycleCritic', 'cond_decoder', 'img2img_generator']
 
 
 def custom_generator(out_size, n_channels, up_op:UpsamplingOperation2d, in_sz=100, 
@@ -178,6 +178,19 @@ class SkipGenerator(nn.Module):
         return self.act(out + x)
     
 
+class CycleGenerator(nn.Module):
+    """Double generator wrapper, suitable for bidirectional image to image translation"""
+    def __init__(self, g_a2b, g_b2a):
+        super().__init__()
+        self.g_a2b = g_a2b
+        self.g_b2a = g_b2a
+        
+    def forward(self, x_a, x_b):
+        out_b = self.g_a2b(x_a)
+        out_a = self.g_b2a(x_b)
+        return out_b, out_a
+    
+
 def res_critic(in_size, n_channels, down_op, id_down_op, n_features=64, n_extra_res_blocks=1, 
                norm_type=NormType.Batch, n_extra_convs_by_res_block=0, sn=True, bn_1st=True,
                downblock_cls=ResBlockDown, flatten_full=False, include_minibatch_std=False,
@@ -203,6 +216,17 @@ def res_critic(in_size, n_channels, down_op, id_down_op, n_features=64, n_extra_
     critic =  nn.Sequential(*layers)
     if sn: add_sn(critic)
     return critic
+
+
+class CycleCritic(nn.Module):
+    """Double critic wrapper, suitable for bidirectional image to image translation."""
+    def __init__(self, c_a, c_b):
+        super().__init__()
+        self.c_a = c_a
+        self.c_b = c_b
+    
+    def forward(self, x_a, x_b):
+        return torch.cat((self.c_a(x_a), self.c_b(x_b)))
 
 
 def default_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):

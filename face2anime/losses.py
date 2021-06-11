@@ -1,12 +1,14 @@
 from face2anime.misc import FeaturesCalculator
 from fastai.vision.all import *
+from fastai.vision.gan import *
 import pandas as pd
 import torch
 
 
 __all__ = ['random_epsilon_gp_sampler', 'GANGPCallback', 'R1GANGPCallback', 
            'repelling_reg_term', 'RepellingRegCallback', 'ContentLossCallback',
-           'LossWrapper', 'CritPredsTracker']
+           'CycleGANLoss', 'CycleConsistencyLoss', 'CycleConsistencyLossCallback', 
+           'IdentityLoss', 'IdentityLossCallback', 'LossWrapper', 'CritPredsTracker']
 
 
 def random_epsilon_gp_sampler(real: torch.Tensor, fake: torch.Tensor) -> torch.Tensor:
@@ -48,9 +50,13 @@ class R1GANGPCallback(Callback):
         self.critic = critic
         
     def _gradient_penalty(self, real, weight):
-        x = real.detach().requires_grad_(True)
+        if not isinstance(real, (list, tuple)):
+            # Single target case
+            # Wrap with a list to handle it the same way as multiple targets case
+            real = [real]
+        x = [real_t.detach().requires_grad_(True) for real_t in real]
         critic = self.critic or self.model.critic
-        preds = critic(x).mean()
+        preds = critic(*x).mean()
 
         grads = torch.autograd.grad(outputs=preds, inputs=x, create_graph=True)[0]
         #return weight * (grads.norm()**2)  
@@ -71,8 +77,8 @@ def repelling_reg_term(ftr_map, weight):
     bs = ftr_map.shape[0]
     flat_ftrs = ftr_map.view(bs, -1)
     norms = flat_ftrs.norm(dim=1).unsqueeze(1)
-    # Cosine similarity between ftrs of any batch
-    # cos_sims[i, j] = cosine similarity between ftrs of batch `i` and ftrs of batch `j`
+    # Cosine similarity between ftrs of any element of batch
+    # cos_sims[i, j] = cosine similarity between ftrs of item `i` and item `j` of current batch
     cos_sims = torch.mm(flat_ftrs, flat_ftrs.t()) / torch.mm(norms, norms.t())
     # Substract bs to discard the diagonal, which is full of 1's
     return weight * (cos_sims.square().sum() - bs) / (bs * (bs - 1))
@@ -112,6 +118,84 @@ class ContentLossCallback(Callback):
             loss_val = self.weight * self.content_loss_func(output_content_ftrs, input_content_ftrs)
             # Store result inside learn.loss_func to make it visible to metrics display
             self.learn.loss_func.content_loss = loss_val
+            self.learn.loss_grad += loss_val
+
+
+class CycleGANLoss(GANModule):
+    "Wrapper around GANLoss that handles inputs, target and G outputs containing two items."
+    def __init__(self, gan_loss:GANLoss):
+        super().__init__()
+        self.gen_loss_func = gan_loss.gen_loss_func
+        self.crit_loss_func = gan_loss.crit_loss_func
+        self.gan_model = gan_loss.gan_model
+        
+    def generator(self, output, target_b, target_a):
+        "Evaluate `out_b, out_a` with the critic then uses `self.gen_loss_func`"
+        out_b, out_a = output
+        fake_pred = self.gan_model.critic(out_b, out_a)
+        self.gen_loss = self.gen_loss_func(fake_pred, output, (target_b, target_a))
+        return self.gen_loss
+
+    def critic(self, real_pred, in_a, in_b):
+        "Create some `fake_pred` with the generator from `in_a, in_b` and compare them to `real_pred` in `self.crit_loss_func`."
+        fake_b, fake_a = self.gan_model.generator(in_a, in_b)
+        fake_b.requires_grad_(False)
+        fake_a.requires_grad_(False)
+        fake_pred = self.gan_model.critic(fake_b, fake_a)
+        self.crit_loss = self.crit_loss_func(real_pred, fake_pred)
+        return self.crit_loss
+
+
+class CycleConsistencyLoss:
+    def __init__(self, g_a2b, g_b2a, loss_func=None):
+        self.g_a2b = g_a2b
+        self.g_b2a = g_b2a
+        self.loss_func = nn.L1Loss() if loss_func is None else loss_func
+    
+    def __call__(self, in_a, in_b, out_b, out_a):
+        in_a_rec = self.g_b2a(out_b)
+        in_b_rec = self.g_a2b(out_a)
+        in_a_rec_loss = self.loss_func(in_a, in_a_rec)
+        in_b_rec_loss = self.loss_func(in_b, in_b_rec)
+        return in_a_rec_loss + in_b_rec_loss
+        
+
+class CycleConsistencyLossCallback(Callback):
+    def __init__(self, g_a2b, g_b2a, loss_func=None, weight=1.):
+        self.loss = CycleConsistencyLoss(g_a2b, g_b2a, loss_func=loss_func)
+        self.weight = weight
+    
+    def after_loss(self):
+        if self.gan_trainer.gen_mode:
+            in_a, in_b = self.x
+            out_b, out_a = self.pred
+            loss_val = self.weight * self.loss(in_a, in_b, out_b, out_a)
+            self.learn.loss_func.cycle_loss = loss_val
+            self.learn.loss_grad += loss_val
+
+
+class IdentityLoss:
+    def __init__(self, g_a2b, g_b2a, loss_func=None):
+        self.g_a2b = g_a2b
+        self.g_b2a = g_b2a
+        self.loss_func = nn.L1Loss() if loss_func is None else loss_func
+        
+    def __call__(self, in_a, in_b):
+        id_a = self.g_b2a(in_a)
+        id_b = self.g_a2b(in_b)
+        return self.loss_func(in_a, id_a) + self.loss_func(in_b, id_b)
+
+    
+class IdentityLossCallback(Callback):
+    def __init__(self, g_a2b, g_b2a, loss_func=None, weight=1.):
+        self.loss = IdentityLoss(g_a2b, g_b2a, loss_func=loss_func)
+        self.weight = weight
+    
+    def after_loss(self):
+        if self.gan_trainer.gen_mode:
+            in_a, in_b = self.x
+            loss_val = self.weight * self.loss(in_a, in_b)
+            self.learn.loss_func.identity_loss = loss_val
             self.learn.loss_grad += loss_val
 
 
