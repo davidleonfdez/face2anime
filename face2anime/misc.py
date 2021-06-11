@@ -31,9 +31,7 @@ class FeaturesCalculator:
         if should_normalize_input:
             if self.input_norm_tf is not None:
                 img_t = self.input_norm_tf.decode(img_t)
-            print('IMG_T BEFORE: ', img_t)
             img_t = normalize_imagenet_tf(img_t)
-            print('IMG_T AFTER: ', img_t)
         return img_t
     
     def _forward(self, img_t:torch.Tensor):
