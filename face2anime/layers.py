@@ -8,11 +8,12 @@ from typing import Callable, List, Type
 
 __all__ = ['ConcatPool2d', 'ConditionalBatchNorm2d', 'MiniBatchStdDev', 'CondConvLayer', 'TransformsLayer',
            'ParamRemover', 'DownsamplingOperation2d', 'AvgPoolHalfDownsamplingOp2d', 
-           'ConcatPoolHalfDownsamplingOp2d', 'ConvHalfDownsamplingOp2d',  'UpsamplingOperation2d', 
-           'PixelShuffleUpsamplingOp2d', 'InterpConvUpsamplingOp2d', 'CondInterpConvUpsamplingOp2d', 
-           'ConvX2UpsamplingOp2d', 'CondConvX2UpsamplingOp2d', 'ParamRemoverUpsamplingOp2d', 'MiniResBlock', 
-           'ResBlockUp', 'RescaledResBlockUp', 'DenseBlockUp', 'CondResBlockUp', 'ResBlockDown', 
-           'RescaledResBlockDown', 'PseudoDenseBlockDown', 'DenseBlockDown']
+           'ConcatPoolHalfDownsamplingOp2d', 'ConvHalfDownsamplingOp2d', 'ZeroDownsamplingOp2d',
+           'UpsamplingOperation2d',  'PixelShuffleUpsamplingOp2d', 'InterpConvUpsamplingOp2d', 
+           'CondInterpConvUpsamplingOp2d',  'ConvX2UpsamplingOp2d', 'CondConvX2UpsamplingOp2d', 
+           'ParamRemoverUpsamplingOp2d', 'MiniResBlock', 'ResBlockUp', 'RescaledResBlockUp', 
+           'DenseBlockUp', 'CondResBlockUp', 'ResBlockDown', 'RescaledResBlockDown', 'PseudoDenseBlockDown', 
+           'DenseBlockDown']
 
 
 class ConcatPool2d(nn.Module):
@@ -203,6 +204,11 @@ class ConvHalfDownsamplingOp2d(DownsamplingOperation2d):
         conv = ConvLayer(in_ftrs, out_ftrs, self.ks, 2, bn_1st=self.bn_1st,
                          **op_kwargs)
         return conv
+
+
+class ZeroDownsamplingOp2d(DownsamplingOperation2d):
+    def get_layer(self, in_ftrs:int=None, out_ftrs:int=None, **op_kwargs) -> nn.Module:
+        return Lambda(lambda t: 0)
 
 
 class UpsamplingOperation2d(ABC):
@@ -427,7 +433,7 @@ class ResBlockDown(nn.Module):
                  id_down_op:DownsamplingOperation2d, n_extra_convs=1,
                  downsample_first=False, norm_type=NormType.Batch, 
                  act_cls=partial(nn.LeakyReLU, negative_slope=0.2),
-                 bn_1st=True, **down_op_kwargs):
+                 bn_1st=True, main_act_cls=None, **down_op_kwargs):
         super().__init__()
         
 #         norm2 = (NormType.BatchZero if norm_type==NormType.Batch else
@@ -445,7 +451,8 @@ class ResBlockDown(nn.Module):
         
         self.id_path = id_down_op.get_layer(in_ftrs, out_ftrs, bias=False)
         
-        self.act = defaults.activation(inplace=True) if act_cls is None else act_cls()
+        main_act_cls = main_act_cls or act_cls or partial(defaults.activation, inplace=True)
+        self.act = main_act_cls()
         
     def forward(self, x): return self.act(self.inner_path(x) + self.id_path(x))
     

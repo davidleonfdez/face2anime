@@ -8,13 +8,13 @@ from torch.nn.utils import spectral_norm
 from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondConvX2UpsamplingOp2d, CondResBlockUp, 
                                ConvHalfDownsamplingOp2d, ConvX2UpsamplingOp2d, DownsamplingOperation2d, 
                                InterpConvUpsamplingOp2d, MiniBatchStdDev, ParamRemoverUpsamplingOp2d, 
-                               ResBlockDown, ResBlockUp, UpsamplingOperation2d)
+                               ResBlockDown, ResBlockUp, UpsamplingOperation2d, ZeroDownsamplingOp2d)
 from face2anime.torch_utils import add_sn
 
 
 __all__ = ['custom_generator', 'res_generator', 'NoiseSplitStrategy', 'NoiseSplitEqualLeave1stOutStrategy', 
            'NoiseSplitDontSplitStrategy', 'CondResGenerator', 'SkipGenerator', 'CycleGenerator', 'res_critic', 
-           'CycleCritic', 'cond_decoder', 'img2img_generator']
+           'CycleCritic', 'default_encoder', 'basic_encoder', 'default_decoder', 'img2img_generator']
 
 
 def custom_generator(out_size, n_channels, up_op:UpsamplingOperation2d, in_sz=100, 
@@ -229,15 +229,7 @@ class CycleCritic(nn.Module):
         return torch.cat((self.c_a(x_a), self.c_b(x_b)))
 
 
-def default_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
-    leakyReLU02 = partial(nn.LeakyReLU, negative_slope=0.2)
-    down_op = ConvHalfDownsamplingOp2d(ks=4, act_cls=leakyReLU02, bn_1st=False,
-                                       norm_type=norm_type)
-    id_down_op = ConcatPoolHalfDownsamplingOp2d(conv_ks=3, act_cls=None, norm_type=None)
-    base_net = res_critic(img_sz, n_ch, down_op, id_down_op,
-                          n_extra_convs_by_res_block=0, act_cls=leakyReLU02,
-                          bn_1st=False, n_features=128, norm_type=norm_type)
-    
+def _adapt_sequential_critic_as_encoder(base_net, out_sz):
     last_conv_rev_idx, last_conv = next((i, l) 
                                         for i, l in enumerate(reversed(base_net)) 
                                         if isinstance(l, (nn.Conv2d, ConvLayer)))
@@ -247,8 +239,34 @@ def default_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
                                            stride=last_conv.stride))
     new_last_conv = spectral_norm(new_last_conv)
 
-    encoder = nn.Sequential(*preserved_layers, new_last_conv, Flatten())
+    return nn.Sequential(*preserved_layers, new_last_conv, Flatten())
+
+
+def default_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
+    leakyReLU02 = partial(nn.LeakyReLU, negative_slope=0.2)
+    down_op = ConvHalfDownsamplingOp2d(ks=4, act_cls=leakyReLU02, bn_1st=False,
+                                       norm_type=norm_type)
+    id_down_op = ConcatPoolHalfDownsamplingOp2d(conv_ks=3, act_cls=None, norm_type=None)
+    base_net = res_critic(img_sz, n_ch, down_op, id_down_op,
+                          n_extra_convs_by_res_block=0, act_cls=leakyReLU02,
+                          bn_1st=False, n_features=128, norm_type=norm_type)
+    
+    encoder = _adapt_sequential_critic_as_encoder(base_net, out_sz)
     return encoder
+
+  
+def basic_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
+    leakyReLU02 = partial(nn.LeakyReLU, negative_slope=0.2)
+    down_op = ConvHalfDownsamplingOp2d(ks=4, act_cls=leakyReLU02, bn_1st=False,
+                                       norm_type=norm_type)
+    id_down_op = ZeroDownsamplingOp2d()
+    downblock_cls = partial(ResBlockDown, main_act_cls=nn.Identity)
+    base_net = res_critic(img_sz, n_ch, down_op, id_down_op,
+                          n_extra_convs_by_res_block=0, act_cls=leakyReLU02,
+                          bn_1st=False, n_features=128, norm_type=norm_type,
+                          downblock_cls=downblock_cls)
+    
+    return _adapt_sequential_critic_as_encoder(base_net, out_sz)
 
 
 def default_decoder(img_sz, n_ch, in_sz, norm_type=NormType.Instance):

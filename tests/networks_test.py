@@ -1,9 +1,10 @@
 from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondConvX2UpsamplingOp2d, 
                                CondInterpConvUpsamplingOp2d, ConvHalfDownsamplingOp2d, 
                                ConvX2UpsamplingOp2d, InterpConvUpsamplingOp2d)
-from face2anime.networks import (CondResGenerator, custom_generator, img2img_generator,
-                                 NoiseSplitDontSplitStrategy, NoiseSplitEqualLeave1stOutStrategy, 
-                                 res_critic, res_generator, SkipGenerator)
+from face2anime.networks import (basic_encoder, CondResGenerator, custom_generator, 
+                                 img2img_generator, NoiseSplitDontSplitStrategy, 
+                                 NoiseSplitEqualLeave1stOutStrategy, res_critic, 
+                                 res_generator, SkipGenerator)
 from face2anime.torch_utils import every_conv_has_sn
 from fastai.vision.all import NormType
 import pytest
@@ -105,6 +106,18 @@ def test_res_critic(in_sz, n_ch, n_ftrs):
 
     assert every_conv_has_sn(crit)
     assert out.size() == torch.Size([bs, 1])
+
+
+@pytest.mark.parametrize("in_sz", [32, 64])
+@pytest.mark.parametrize("n_ch", [1, 3])
+@pytest.mark.parametrize("out_sz", [50, 100])
+def test_basic_encoder(in_sz, n_ch, out_sz):
+    enc = basic_encoder(in_sz, n_ch, out_sz)
+
+    bs = randint(1, 5)
+    out = enc(torch.rand(bs, n_ch, in_sz, in_sz))
+
+    assert out.size() == torch.Size([bs, out_sz])
 
 
 @pytest.mark.parametrize("in_sz", [32, 64])
