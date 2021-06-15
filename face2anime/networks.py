@@ -279,12 +279,13 @@ def default_decoder(img_sz, n_ch, in_sz, norm_type=NormType.Instance, hooks_by_s
 
 
 class Img2ImgGenerator(nn.Sequential):
-    def __init__(self, in_sz, n_ch, latent_sz=100, encoder=None, decoder=None, mid_mlp_depth=0,
-                 skip_connect=False):
+    def __init__(self, in_sz, n_ch, latent_sz=100, encoder=None, decoder_builder=None, 
+                 mid_mlp_depth=0, skip_connect=False):
         if encoder is None: encoder = default_encoder(in_sz, n_ch, latent_sz)
         hooks_by_sz = None
         if skip_connect: self.hooks, hooks_by_sz = self._get_encoder_hooks(encoder, in_sz)
-        if decoder is None: decoder = default_decoder(in_sz, n_ch, latent_sz, hooks_by_sz=hooks_by_sz)
+        if decoder_builder is None: decoder_builder = default_decoder
+        decoder = decoder_builder(in_sz, n_ch, latent_sz, hooks_by_sz=hooks_by_sz)
         
         layers = [encoder, decoder]
         if mid_mlp_depth > 0: 
