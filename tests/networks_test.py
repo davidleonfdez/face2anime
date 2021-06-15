@@ -2,7 +2,7 @@ from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondConvX2Upsampl
                                CondInterpConvUpsamplingOp2d, ConvHalfDownsamplingOp2d, 
                                ConvX2UpsamplingOp2d, InterpConvUpsamplingOp2d)
 from face2anime.networks import (basic_encoder, CondResGenerator, custom_generator, 
-                                 img2img_generator, NoiseSplitDontSplitStrategy, 
+                                 Img2ImgGenerator, NoiseSplitDontSplitStrategy, 
                                  NoiseSplitEqualLeave1stOutStrategy, res_critic, 
                                  res_generator, SkipGenerator)
 from face2anime.torch_utils import every_conv_has_sn
@@ -124,8 +124,10 @@ def test_basic_encoder(in_sz, n_ch, out_sz):
 @pytest.mark.parametrize("n_ch", [1, 3])
 @pytest.mark.parametrize("latent_sz", [50, 100])
 @pytest.mark.parametrize("mid_mlp_depth", [0, 2])
-def test_img2img_generator(in_sz, n_ch, latent_sz, mid_mlp_depth):
-    g = img2img_generator(in_sz, n_ch, latent_sz=latent_sz, mid_mlp_depth=mid_mlp_depth)
+@pytest.mark.parametrize("skip_connect", [False, True])
+def test_img2img_generator(in_sz, n_ch, latent_sz, mid_mlp_depth, skip_connect):
+    g = Img2ImgGenerator(in_sz, n_ch, latent_sz=latent_sz, mid_mlp_depth=mid_mlp_depth,
+                         skip_connect=skip_connect)
 
     bs = randint(1, 5)
     # Needed because BN expects more than 1 value per channel when training

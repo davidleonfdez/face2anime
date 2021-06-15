@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from face2anime.gen_utils import coalesce
 from fastai.vision.all import *
 import torch
 import torch.nn as nn
@@ -358,12 +359,10 @@ class ResBlockUp(nn.Module):
     def __init__(self, in_ftrs, out_ftrs, up_op:UpsamplingOperation2d, 
                  id_up_op:UpsamplingOperation2d, n_extra_convs=1, 
                  upsample_first=True, norm_type=NormType.Batch, 
-                 act_cls=nn.ReLU, bn_1st=True, **up_op_kwargs):
+                 act_cls=nn.ReLU, bn_1st=True, hook=None, **up_op_kwargs):
         super().__init__()
-        
-#         norm2 = (NormType.BatchZero if norm_type==NormType.Batch else
-#                  NormType.InstanceZero if norm_type==NormType.Instance 
-#                  else norm_type)
+        self.hook = hook        
+
         up_layer = up_op.get_layer(in_ftrs, out_ftrs, **up_op_kwargs)
         extra_convs_ftrs = out_ftrs if upsample_first else in_ftrs
         inner_path_ls = ([ConvLayer(extra_convs_ftrs, extra_convs_ftrs, bn_1st=bn_1st, norm_type=norm_type,
@@ -375,10 +374,20 @@ class ResBlockUp(nn.Module):
         self.inner_path = nn.Sequential(*inner_path_ls)
         
         self.id_path = id_up_op.get_layer(in_ftrs, out_ftrs)
+
+        if hook is not None: 
+            self.hook_adapter = ConvLayer(out_ftrs*2, out_ftrs, bn_1st=bn_1st, 
+                                          norm_type=norm_type, 
+                                          act_cls=act_cls if not bn_1st else None)
         
         self.act = defaults.activation(inplace=True) if act_cls is None else act_cls()
         
-    def forward(self, x): return self.act(self.inner_path(x) + self.id_path(x))
+    def forward(self, x): 
+        out = self.inner_path(x) + self.id_path(x)
+        if self.hook is not None:
+            out = torch.cat((out, self.hook.stored), axis=1)
+            out = self.hook_adapter(out)
+        return self.act(out)
     
 
 class RescaledResBlockUp(ResBlockUp):
@@ -451,7 +460,7 @@ class ResBlockDown(nn.Module):
         
         self.id_path = id_down_op.get_layer(in_ftrs, out_ftrs, bias=False)
         
-        main_act_cls = main_act_cls or act_cls or partial(defaults.activation, inplace=True)
+        main_act_cls = coalesce(main_act_cls, act_cls, partial(defaults.activation, inplace=True))
         self.act = main_act_cls()
         
     def forward(self, x): return self.act(self.inner_path(x) + self.id_path(x))

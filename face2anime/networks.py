@@ -14,7 +14,7 @@ from face2anime.torch_utils import add_sn
 
 __all__ = ['custom_generator', 'res_generator', 'NoiseSplitStrategy', 'NoiseSplitEqualLeave1stOutStrategy', 
            'NoiseSplitDontSplitStrategy', 'CondResGenerator', 'SkipGenerator', 'CycleGenerator', 'res_critic', 
-           'CycleCritic', 'default_encoder', 'basic_encoder', 'default_decoder', 'img2img_generator']
+           'CycleCritic', 'default_encoder', 'basic_encoder', 'default_decoder', 'Img2ImgGenerator']
 
 
 def custom_generator(out_size, n_channels, up_op:UpsamplingOperation2d, in_sz=100, 
@@ -36,16 +36,17 @@ def custom_generator(out_size, n_channels, up_op:UpsamplingOperation2d, in_sz=10
 
 def res_generator(out_sz, n_ch, up_op:UpsamplingOperation2d, id_up_op:UpsamplingOperation2d,
                   in_sz=100, n_features=64, n_extra_res_blocks=1, n_extra_convs_by_res_block=1,
-                  sn=True, bn_1st=True, upblock_cls=ResBlockUp, **kwargs):
+                  sn=True, bn_1st=True, upblock_cls=ResBlockUp, hooks_by_sz=None, **kwargs):
     cur_sz, cur_ftrs = 4, n_features//2
     while cur_sz < out_sz:  cur_sz *= 2; cur_ftrs *= 2
     layers = [AddChannels(2), 
               ConvLayer(in_sz, cur_ftrs, 4, 1, transpose=True, bn_1st=bn_1st, **kwargs)]
     cur_sz = 4
     while cur_sz < out_sz // 2:
+        hook = hooks_by_sz.get(cur_sz*2) if hooks_by_sz is not None else None
         layers.append(upblock_cls(cur_ftrs, cur_ftrs//2, up_op, id_up_op, 
                                   n_extra_convs=n_extra_convs_by_res_block,
-                                  bn_1st=bn_1st, **kwargs))
+                                  bn_1st=bn_1st, hook=hook, **kwargs))
         cur_ftrs //= 2; cur_sz *= 2
     layers += [ResBlock(1, cur_ftrs, cur_ftrs, bn_1st=bn_1st, **kwargs) 
                for _ in range(n_extra_res_blocks)]
@@ -269,22 +270,39 @@ def basic_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
     return _adapt_sequential_critic_as_encoder(base_net, out_sz)
 
 
-def default_decoder(img_sz, n_ch, in_sz, norm_type=NormType.Instance):
+def default_decoder(img_sz, n_ch, in_sz, norm_type=NormType.Instance, hooks_by_sz=None):
     up_op = ConvX2UpsamplingOp2d(ks=4, act_cls=nn.ReLU, bn_1st=False, norm_type=norm_type)
     id_up_op = InterpConvUpsamplingOp2d(ks=3, act_cls=None, norm_type=norm_type)
     decoder = res_generator(img_sz, n_ch, up_op, id_up_op, in_sz=in_sz, bn_1st=False, 
-                            n_features=128, norm_type=norm_type)
+                            n_features=128, norm_type=norm_type, hooks_by_sz=hooks_by_sz)
     return decoder
 
 
-def img2img_generator(in_sz, n_ch, latent_sz=100, encoder=None, decoder=None, mid_mlp_depth=0):
-    if encoder is None: encoder = default_encoder(in_sz, n_ch, latent_sz)
-    if decoder is None: decoder = default_decoder(in_sz, n_ch, latent_sz)
-    
-    layers = [encoder, decoder]
-    if mid_mlp_depth > 0: 
-        mlp_ls = [LinBnDrop(latent_sz, latent_sz, act=nn.ReLU(), lin_first=True) 
-                  for _ in range(mid_mlp_depth)]
-        layers[1:1] = mlp_ls
-        # TODO: Add SN to linear??
-    return nn.Sequential(*layers)
+class Img2ImgGenerator(nn.Sequential):
+    def __init__(self, in_sz, n_ch, latent_sz=100, encoder=None, decoder=None, mid_mlp_depth=0,
+                 skip_connect=False):
+        if encoder is None: encoder = default_encoder(in_sz, n_ch, latent_sz)
+        hooks_by_sz = None
+        if skip_connect: self.hooks, hooks_by_sz = self._get_encoder_hooks(encoder, in_sz)
+        if decoder is None: decoder = default_decoder(in_sz, n_ch, latent_sz, hooks_by_sz=hooks_by_sz)
+        
+        layers = [encoder, decoder]
+        if mid_mlp_depth > 0: 
+            mlp_ls = [LinBnDrop(latent_sz, latent_sz, act=nn.ReLU(), lin_first=True) 
+                      for _ in range(mid_mlp_depth)]
+            layers[1:1] = mlp_ls
+            # TODO: Add SN to linear??
+        
+        super().__init__(*layers)
+
+    def _get_encoder_hooks(self, encoder, in_sz):
+        sizes = model_sizes(encoder, size=(in_sz, in_sz))
+        spatial_sizes = [in_sz] + [sz[-1] for sz in sizes if len(sz) == 4]
+        modules_to_hook_idxs_szs = [(i, sz) for i, sz in enumerate(spatial_sizes[1:]) 
+                                    if (sz > 1) and sz != spatial_sizes[i-1]]
+        hooks = hook_outputs([encoder[i] for i, sz in modules_to_hook_idxs_szs], detach=False)
+        hooks_by_sz = {sz: h for (_, sz), h in zip(modules_to_hook_idxs_szs, hooks)}
+        return hooks, hooks_by_sz
+
+    def __del__(self):
+        if hasattr(self, "hooks"): self.hooks.remove()
