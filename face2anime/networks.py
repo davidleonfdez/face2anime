@@ -14,7 +14,8 @@ from face2anime.torch_utils import add_sn
 
 __all__ = ['custom_generator', 'res_generator', 'NoiseSplitStrategy', 'NoiseSplitEqualLeave1stOutStrategy', 
            'NoiseSplitDontSplitStrategy', 'CondResGenerator', 'SkipGenerator', 'CycleGenerator', 'res_critic', 
-           'CycleCritic', 'default_encoder', 'basic_encoder', 'default_decoder', 'Img2ImgGenerator']
+           'patch_res_critic', 'CycleCritic', 'default_encoder', 'basic_encoder', 'default_decoder', 
+           'Img2ImgGenerator']
 
 
 def custom_generator(out_size, n_channels, up_op:UpsamplingOperation2d, in_sz=100, 
@@ -214,6 +215,26 @@ def res_critic(in_size, n_channels, down_op, id_down_op, n_features=64, n_extra_
         cur_ftrs += 1
     #layers += [init_default(nn.Conv2d(cur_ftrs, 1, 4, padding=0, bias=False), init), Flatten()]    
     layers += [init_default(nn.Conv2d(cur_ftrs, 1, 4, padding=0), init), Flatten(full=flatten_full)]
+    critic =  nn.Sequential(*layers)
+    if sn: add_sn(critic)
+    return critic
+
+
+def patch_res_critic(in_sz, n_channels, out_sz, down_op, id_down_op, n_features=64, n_extra_res_blocks=1, 
+                     norm_type=NormType.Batch, n_extra_convs_by_res_block=0, sn=True, bn_1st=True,
+                     downblock_cls=ResBlockDown, flatten_full=False, **kwargs):
+    "A patch critic for images `n_channels` x `in_sz` x `in_sz`."
+    layers = [down_op.get_layer(n_channels, n_features, norm_type=None, **kwargs)]
+    cur_sz, cur_ftrs = in_sz//2, n_features
+    layers += [ResBlock(1, cur_ftrs, cur_ftrs, norm_type=norm_type, bn_1st=bn_1st, **kwargs) 
+               for _ in range(n_extra_res_blocks)]
+    while cur_sz > out_sz:
+        layers.append(downblock_cls(cur_ftrs, cur_ftrs*2, down_op, id_down_op,
+                                    n_extra_convs=n_extra_convs_by_res_block,
+                                    norm_type=norm_type, bn_1st=bn_1st, **kwargs))
+        cur_ftrs *= 2 ; cur_sz //= 2
+    init = kwargs.get('init', nn.init.kaiming_normal_)
+    layers += [init_default(nn.Conv2d(cur_ftrs, 1, 3, padding=1), init), Flatten(full=flatten_full)]
     critic =  nn.Sequential(*layers)
     if sn: add_sn(critic)
     return critic

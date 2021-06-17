@@ -3,8 +3,8 @@ from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondConvX2Upsampl
                                ConvX2UpsamplingOp2d, InterpConvUpsamplingOp2d)
 from face2anime.networks import (basic_encoder, CondResGenerator, custom_generator, 
                                  Img2ImgGenerator, NoiseSplitDontSplitStrategy, 
-                                 NoiseSplitEqualLeave1stOutStrategy, res_critic, 
-                                 res_generator, SkipGenerator)
+                                 NoiseSplitEqualLeave1stOutStrategy, patch_res_critic,
+                                 res_critic, res_generator, SkipGenerator)
 from face2anime.torch_utils import every_conv_has_sn
 from fastai.vision.all import NormType
 import pytest
@@ -106,6 +106,27 @@ def test_res_critic(in_sz, n_ch, n_ftrs):
 
     assert every_conv_has_sn(crit)
     assert out.size() == torch.Size([bs, 1])
+
+
+@pytest.mark.parametrize("in_sz", [32, 64])
+@pytest.mark.parametrize("n_ch", [1, 3])
+@pytest.mark.parametrize("n_ftrs", [16, 32])
+@pytest.mark.parametrize("out_sz", [4, 8])
+def test_patch_res_critic(in_sz, n_ch, n_ftrs, out_sz):
+    down_op = ConvHalfDownsamplingOp2d()
+    id_down_op = ConcatPoolHalfDownsamplingOp2d()
+    crit_args = [in_sz, n_ch, out_sz, down_op, id_down_op]
+    crit = patch_res_critic(*crit_args, n_features=n_ftrs, flatten_full=False)
+    crit_flat_out = patch_res_critic(*crit_args, n_features=n_ftrs, flatten_full=True)
+
+    bs = randint(1, 5)
+    in_t = torch.rand(bs, n_ch, in_sz, in_sz)
+    out = crit(in_t)
+    flat_out = crit_flat_out(in_t)
+
+    assert every_conv_has_sn(crit)
+    assert out.size() == torch.Size([bs, out_sz**2])
+    assert flat_out.size() == torch.Size([bs * out_sz**2])
 
 
 @pytest.mark.parametrize("in_sz", [32, 64])
