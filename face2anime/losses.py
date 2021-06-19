@@ -3,12 +3,14 @@ from fastai.vision.all import *
 from fastai.vision.gan import *
 import pandas as pd
 import torch
+from typing import Callable
 
 
 __all__ = ['random_epsilon_gp_sampler', 'GANGPCallback', 'R1GANGPCallback', 
            'repelling_reg_term', 'RepellingRegCallback', 'ContentLossCallback',
            'CycleGANLoss', 'CycleConsistencyLoss', 'CycleConsistencyLossCallback', 
-           'IdentityLoss', 'IdentityLossCallback', 'LossWrapper', 'CritPredsTracker']
+           'IdentityLoss', 'IdentityLossCallback', 'LossWrapper', 'CritPredsTracker',
+           'MultiCritPredsTracker']
 
 
 def random_epsilon_gp_sampler(real: torch.Tensor, fake: torch.Tensor) -> torch.Tensor:
@@ -235,3 +237,27 @@ class CritPredsTracker():
     def reset(self):
         self.real_preds = None
         self.fake_preds = None
+
+
+class MultiCritPredsTracker():
+    def __init__(self, n=2, reduce_batch=False, group_preds:Callable=None):
+        assert n >= 2
+        self.trackers = [CritPredsTracker(reduce_batch=reduce_batch) for _ in range(n)]
+        self.group_preds = ifnone(group_preds, lambda t: torch.chunk(t, n))
+
+    def __call__(self, real_pred, fake_pred):
+        real_pred_groups = self.group_preds(real_pred) 
+        fake_pred_groups = self.group_preds(fake_pred)
+
+        for real_pred, fake_pred, tracker in zip(real_pred_groups, fake_pred_groups, self.trackers):
+            tracker(real_pred, fake_pred)
+        
+    def load_from_dfs(self, dfs, device):
+        for df, tracker in zip (dfs, self.trackers):
+            tracker.load_from_df(df, device)
+        
+    def to_dfs(self):
+        return [tracker.to_df() for tracker in self.trackers]
+    
+    def reset(self):
+        for tracker in self.trackers: tracker.reset()
