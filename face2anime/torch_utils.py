@@ -1,6 +1,7 @@
 import torch.nn as nn
 from torch.nn.utils import spectral_norm
 from torch.nn.utils.spectral_norm import SpectralNorm
+from typing import Union, Tuple
 
 
 __all__ = ['is_conv', 'has_sn_hook', 'every_conv_has_sn', 'get_mean_weights', 
@@ -27,7 +28,7 @@ def every_conv_has_sn(module:nn.Module):
     return True
 
 
-def get_mean_weights(m:nn.Module, layer_types):
+def get_mean_weights(m:nn.Module, layer_types: Union[type, Tuple[type, ...]]):
     all_modules_dict = dict(m.named_modules())
     result = {}
     for param_name, param in m.named_parameters():

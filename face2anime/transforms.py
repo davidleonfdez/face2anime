@@ -49,14 +49,25 @@ class _DifferentiableHue():
     
 
 class DifferentiableHue(HSVTfm):
-    "Apply change in hue of `max_hue` to batch of images with probability `p`."
-    # It's a copy of fastai `Hue` modified not to use non differentiable method `Tensor.set_`
-    # Ref: https://pytorch.org/docs/stable/torchvision/transforms.html#torchvision.transforms.functional.adjust_hue
+    """Apply change in hue of `max_hue` to batch of images with probability `p`.
+
+    It's a copy of fastai `Hue` modified not to use non differentiable method `Tensor.set_`.
+    Ref: https://pytorch.org/docs/stable/torchvision/transforms.html#torchvision.transforms.functional.adjust_hue
+    """
+    #
     def __init__(self,max_hue=0.1, p=0.75, draw=None, batch=False):
         super().__init__(_DifferentiableHue(max_hue, p, draw, batch))
 
 
 class ADATransforms():
+    """Groups a set of transforms suitable for adaptive discriminator augmentation.
+    
+    Args:
+        p (float): initial probability.
+        img_sz: spatial sizes of the images to which the transforms will be applied.
+            Example: (64, 64)
+        pad_mode: padding mode of transforms.
+    """
     def __init__(self, p, img_sz:Tuple, pad_mode=PadMode.Reflection):
         self.flip = Flip(p=self._p_flip(p), pad_mode=pad_mode)
         def draw_90_multiple(x): return (x.new_empty(x.size(0)).uniform_(0, 4) // 1) * 90
@@ -127,9 +138,22 @@ class ADATransforms():
 
 
 class AdaptiveAugmentsCallback(Callback):
-    def __init__(self, ada_transforms, crit_preds_tracker, update_cycle_len=5,
-                 preds_above_0_overfit_threshold=0.6, bs=64,
-                 n_imgs_to_reach_p_1=5e5):
+    """Adaptively modifies the probability of a set of tfms depending on the degree of overfitting of a GAN critic.
+    
+    It follows the "rt" heuristic proposed in "Training Generative Adversarial Networks with Limited Data".
+    Args:
+        ada_transforms: set of transforms
+        crit_preds_tracker: tracker that stores (at least) the predictions for real images in a `real_preds` 
+            attribute.
+        update_cycle_len: number of opt steps between updates of transforms probability.
+        preds_above_0_overfit_threshold: target value of the "rt" heuristic, i.e., percentage of logits of real
+            preds that must be above 0 to consider the critic to be overfitting to real images.
+        bs: size of the batches sent to the critic during the training run.
+        n_imgs_to_reach_p_1: number of images evaluated before reaching `p` = 1 assuming the critic is constantly
+            overfitting. It can be seen as the speed at which `p` grows.
+    """
+    def __init__(self, ada_transforms:ADATransforms, crit_preds_tracker, update_cycle_len=5,
+                 preds_above_0_overfit_threshold=0.6, bs=64, n_imgs_to_reach_p_1=5e5):
         self.ada_transforms = ada_transforms
         self.preds_tracker = crit_preds_tracker
         self.update_cycle_len = update_cycle_len

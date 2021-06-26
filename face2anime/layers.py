@@ -71,6 +71,7 @@ class ConditionalInstanceNorm2d(nn.Module):
 
 
 class MiniBatchStdDev(nn.Module):
+    """Layer that appends to every element of a batch a new ftr map containing the std of its group."""
     def __init__(self, group_sz=4, unbiased_std=False):
         super().__init__()
         self.group_sz = group_sz
@@ -87,6 +88,7 @@ class MiniBatchStdDev(nn.Module):
 
 
 class TransformsLayer(nn.Module):
+    "Applies a chain of transforms to the input tensor"
     def __init__(self, tfms:List[RandTransform]):
         super().__init__()
         self.tfms = tfms
@@ -101,6 +103,7 @@ class TransformsLayer(nn.Module):
 
 
 class ParamRemover(nn.Module):
+    "Forwards the input args minus the last one to a wrapped module."
     def __init__(self, module):
         super().__init__()
         self.module = module
@@ -154,6 +157,7 @@ class DownsamplingOperation2d(ABC):
 
     
 class AvgPoolHalfDownsamplingOp2d(DownsamplingOperation2d):
+    "Returns a module that downsamples the input spatially using an AvgPool layer."
     def __init__(self, conv_ks=3, act_cls=None, norm_type=None):
         self.conv_ks = conv_ks
         self.act_cls = act_cls
@@ -168,6 +172,7 @@ class AvgPoolHalfDownsamplingOp2d(DownsamplingOperation2d):
 
     
 class ConcatPoolHalfDownsamplingOp2d(DownsamplingOperation2d):
+    "Returns a module that downsamples the input spatially using a ConcatPool layer."
     def __init__(self, conv_ks=3, act_cls=None, norm_type=None, always_add_conv=False):
         self.conv_ks = conv_ks
         self.act_cls = act_cls
@@ -183,6 +188,7 @@ class ConcatPoolHalfDownsamplingOp2d(DownsamplingOperation2d):
     
 
 class ConvHalfDownsamplingOp2d(DownsamplingOperation2d):
+    "Returns a module that downsamples the input spatially using a strided convolution."
     def __init__(self, ks=4, padding=1, act_cls:Type[nn.Module]=None, norm_type=None,
                  bn_1st=True):
         self.ks=ks
@@ -208,6 +214,7 @@ class ConvHalfDownsamplingOp2d(DownsamplingOperation2d):
 
 
 class ZeroDownsamplingOp2d(DownsamplingOperation2d):
+    "Returns a module whose output is always zero."
     def get_layer(self, in_ftrs:int=None, out_ftrs:int=None, **op_kwargs) -> nn.Module:
         return Lambda(lambda t: 0)
 
@@ -220,6 +227,7 @@ class UpsamplingOperation2d(ABC):
 
     
 class PixelShuffleUpsamplingOp2d(UpsamplingOperation2d):
+    "Returns a module that upsamples the input spatially using pixel shuffle."
     def __init__(self, scale_factor=2, blur=False, n_extra_convs=0, act_cls:Type[nn.Module]=None, norm_type=None):
         self.scale_factor = scale_factor
         self.blur = blur
@@ -243,6 +251,7 @@ class PixelShuffleUpsamplingOp2d(UpsamplingOperation2d):
 
     
 class InterpConvUpsamplingOp2d(UpsamplingOperation2d):
+    "Returns a module that upsamples the input using interpolation followed by a neutral conv."
     def __init__(self, scale_factor=2, mode='nearest', ks=3, act_cls:Type[nn.Module]=None,
                  norm_type=NormType.Batch, bn_1st=True):
         self.scale_factor = scale_factor
@@ -263,6 +272,11 @@ class InterpConvUpsamplingOp2d(UpsamplingOperation2d):
 
 
 class CondInterpConvUpsamplingOp2d(UpsamplingOperation2d):
+    """Returns a module that upsamples the input using interpolation followed by a neutral conv.
+    
+    The input passed to the module should contain two parameters, with the last one being the 
+    condition vector, which is used as the second param of a conditional BN/IN layer included 
+    after the convolution"""
     def __init__(self, cond_sz, scale_factor=2, mode='nearest', ks=3, act_cls:Type[nn.Module]=None,
                  norm_type=NormType.Batch, bn_1st=True):
         self.cond_sz = cond_sz
@@ -284,6 +298,7 @@ class CondInterpConvUpsamplingOp2d(UpsamplingOperation2d):
 
 
 class ConvX2UpsamplingOp2d(UpsamplingOperation2d):
+    "Returns a module that upsamples the input spatially using a strided transpose convolution."
     def __init__(self, ks=4, act_cls:Type[nn.Module]=None, padding=1, output_padding=0,
                  norm_type=NormType.Batch, bn_1st=True):
         #self.apply_sn = apply_sn
@@ -310,6 +325,11 @@ class ConvX2UpsamplingOp2d(UpsamplingOperation2d):
 
 
 class CondConvX2UpsamplingOp2d(UpsamplingOperation2d):
+    """Returns a module that upsamples the input spatially using a strided transpose convolution.
+    
+    The input passed to the module should contain two parameters, with the last one being the 
+    condition vector, which is used as the second param of a conditional BN/IN layer included 
+    after the convolution"""    
     def __init__(self, cond_sz, ks=4, act_cls:Type[nn.Module]=None, padding=1, output_padding=0,
                  norm_type=NormType.Batch, bn_1st=True):
         self.cond_sz = cond_sz
@@ -334,7 +354,8 @@ class CondConvX2UpsamplingOp2d(UpsamplingOperation2d):
 
 
 class ParamRemoverUpsamplingOp2d(UpsamplingOperation2d):
-    def __init__(self, wrapped_up_op):
+    "Returns a module that forwards the input args minus the last one to the wrapped up op."
+    def __init__(self, wrapped_up_op:UpsamplingOperation2d):
         self.wrapped_up_op = wrapped_up_op
         
     def get_layer(self, in_ftrs:int=None, out_ftrs:int=None, **op_kwargs) -> nn.Module:
@@ -356,6 +377,7 @@ class MiniResBlock(nn.Module):
 
 
 class ResBlockUp(nn.Module):
+    "Upsampling block with an identity connection that should include some simple upsampling operation."
     def __init__(self, in_ftrs, out_ftrs, up_op:UpsamplingOperation2d, 
                  id_up_op:UpsamplingOperation2d, n_extra_convs=1, 
                  upsample_first=True, norm_type=NormType.Batch, 
@@ -391,10 +413,12 @@ class ResBlockUp(nn.Module):
     
 
 class RescaledResBlockUp(ResBlockUp):
+    "Like ResBlockUp, but divides the output by half."
     def forward(self, x): return self.act((self.inner_path(x) + self.id_path(x)) / 2)
     
 
 class DenseBlockUp(ResBlockUp):
+    "Upsampling dense block with an identity connection that should include some simple upsampling operation."
     def __init__(self, in_ftrs, out_ftrs, up_op:UpsamplingOperation2d, 
                  id_up_op:UpsamplingOperation2d, n_extra_convs=1, 
                  upsample_first=True, norm_type=NormType.Batch, 
@@ -411,6 +435,11 @@ class DenseBlockUp(ResBlockUp):
 
 
 class CondResBlockUp(nn.Module):
+    """Upsampling block with an identity connection that should include some simple upsampling operation.
+    
+    The input passed to the module should contain two parameters, with the last one being the condition 
+    vector, which is used as the second param of the conditional BN/IN layers included in the block.
+    """
     def __init__(self, in_ftrs, out_ftrs, cond_sz, up_op:UpsamplingOperation2d, 
                  id_up_op:UpsamplingOperation2d, n_extra_convs=1, 
                  upsample_first=True, norm_type=NormType.Batch, 
@@ -438,6 +467,7 @@ class CondResBlockUp(nn.Module):
 
 
 class ResBlockDown(nn.Module):
+    "Downsampling block with an identity connection that should include some simple downsampling operation."
     def __init__(self, in_ftrs, out_ftrs, down_op:DownsamplingOperation2d, 
                  id_down_op:DownsamplingOperation2d, n_extra_convs=1,
                  downsample_first=False, norm_type=NormType.Batch, 
@@ -467,10 +497,15 @@ class ResBlockDown(nn.Module):
     
 
 class RescaledResBlockDown(ResBlockDown):
+    "Like ResBlockDown, but divides the output by half."
     def forward(self, x): return self.act((self.inner_path(x) + self.id_path(x)) / 2)
     
     
 class PseudoDenseBlockDown(ResBlockDown):
+    """Downsampling dense block with an identity connection that should include some simple downsampling operation.
+    
+    Its dowsampling operations reduce the number of features to out_ftrs//2 before the concatenation in order to
+    enforce the output to match `out_ftrs`."""
     def __init__(self, in_ftrs, out_ftrs, down_op:DownsamplingOperation2d, 
                  id_down_op:DownsamplingOperation2d, n_extra_convs=1,
                  downsample_first=False, norm_type=NormType.Batch, 
@@ -485,6 +520,10 @@ class PseudoDenseBlockDown(ResBlockDown):
     
     
 class DenseBlockDown(ResBlockDown):
+    """Downsampling dense block with an identity connection that should include some simple downsampling operation.
+    
+    It includes an extra neutral ConvLayer that reduces the number of features after the concatenation
+    to match `out_ftrs`."""
     def __init__(self, in_ftrs, out_ftrs, down_op:DownsamplingOperation2d, 
                  id_down_op:DownsamplingOperation2d, n_extra_convs=1,
                  downsample_first=False, norm_type=NormType.Batch, 

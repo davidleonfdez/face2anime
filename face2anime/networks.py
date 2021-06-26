@@ -38,6 +38,31 @@ def custom_generator(out_size, n_channels, up_op:UpsamplingOperation2d, in_sz=10
 def res_generator(out_sz, n_ch, up_op:UpsamplingOperation2d, id_up_op:UpsamplingOperation2d,
                   in_sz=100, n_features=64, n_extra_res_blocks=1, n_extra_convs_by_res_block=1,
                   sn=True, bn_1st=True, upblock_cls=ResBlockUp, hooks_by_sz=None, **kwargs):
+    """Builds a residual generator from `in_sz` to images `n_ch` x `out_size` x `out_size`.
+
+    kwargs are forwarded to `ConvLayer,` `ResBlock` and `upblock_cls`.
+    Args:
+        out_sz: size of each one of the two spatial dimensions of the output (squared images
+            are assumed).
+        n_ch: number of channels of the output images.
+        up_op: upsampling operation to include everywhere but in the identity connections of the 
+            upsampling residual blocks.
+        id_up_op: upsampling operation used in the identity connections of the upsampling residual
+            blocks.
+        n_features: number of input features of the last upsampling layer.
+        n_extra_res_blocks: number of additional residual blocks included right before the last
+            upsampling layer.
+        n_extra_convs_by_res_block: number of additional convolutional layers included in the main
+            path of upsampling residual blocks.
+        sn: whether to perform spectral normalization on convolutional layers.
+        bn_1st: if True, BN/IN layers are placed before the activation, so that the order would be
+            conv-BN-act, instead of conv-act-BN.
+        upblock_cls: class of the upsampling residual blocks. It should be a subclass of ResBlockUp
+            or, at least, share the same __init__ signature.
+        hooks_by_sz (dict): dictionary with integers as keys and `Hook` as values. The tensor stored
+            in hook `hooks_by_sz[x]` will be concatenated with the output of the upsamling residual 
+            block whose spatial size is `(x, x)`.
+    """
     cur_sz, cur_ftrs = 4, n_features//2
     while cur_sz < out_sz:  cur_sz *= 2; cur_ftrs *= 2
     layers = [AddChannels(2), 
@@ -57,7 +82,8 @@ def res_generator(out_sz, n_ch, up_op:UpsamplingOperation2d, id_up_op:Upsampling
     return generator
 
 
-class NoiseSplitStrategy(ABC):    
+class NoiseSplitStrategy(ABC): 
+    "Child classes must implement a method of obtaining 'n' segments of whatever size from a given tensor."
     @abstractmethod
     def calc_cond_sz(self, noise_sz, n_splits):
         pass
@@ -67,7 +93,8 @@ class NoiseSplitStrategy(ABC):
         pass
 
 
-class NoiseSplitEqualLeave1stOutStrategy(NoiseSplitStrategy):     
+class NoiseSplitEqualLeave1stOutStrategy(NoiseSplitStrategy):
+    "Splits a noise vector into chunks of equal size and discards the first one." 
     def calc_cond_sz(self, noise_sz, n_splits):
         # Divide by `n_splits+1` to next leave first chunk out of conditions
         return noise_sz // (n_splits + 1)
@@ -79,6 +106,7 @@ class NoiseSplitEqualLeave1stOutStrategy(NoiseSplitStrategy):
     
     
 class NoiseSplitDontSplitStrategy(NoiseSplitStrategy):
+    "Doesn't split the noise vector; i.e., returns the whole vector for every required split." 
     def calc_cond_sz(self, noise_sz, n_splits):
         return noise_sz
         
@@ -87,12 +115,39 @@ class NoiseSplitDontSplitStrategy(NoiseSplitStrategy):
 
 
 class CondResGenerator(nn.Module):
+    """Residual generator with conditional BN/IN layers.
+    
+    The input tensor is split, according to `noise_split_strategy`, in as many
+    chunks as residual upsampling blocks there are, so that each chunk is fed
+    into a block to condition its CBN/CIN layers.
+    Args:
+        out_sz: size of each one of the two spatial dimensions of the output (squared 
+            images are assumed).
+        n_ch: number of channels of the output images.
+        up_op: upsampling operation to include everywhere but in the identity connections of the 
+            upsampling residual blocks.
+        id_up_op: upsampling operation used in the identity connections of the upsampling residual
+            blocks.
+        noise_split_strategy: defines how to divide the input into chunks, so that each one can
+            be used as the conditional input of a different upsampling residual block.
+        in_sz: size of the input tensor, batch size excluded.
+        n_features: number of input features of the last upsampling layer.
+        n_extra_res_blocks: number of additional residual blocks included right before the last
+            upsampling layer.
+        n_extra_convs_by_res_block: number of additional convolutional layers included in the main
+            path of upsampling residual blocks.
+        sn: whether to perform spectral normalization on convolutional layers.
+        bn_1st: if True, BN/IN layers are placed before the activations, so that the order would be
+            conv-BN-act, instead of conv-act-BN.
+        upblock_cls: class of the conditional upsampling residual blocks. It should be a subclass of 
+            CondResBlockUp or, at least, share the same __init__ signature.
+    """
     init_sz = 4
     
-    def __init__(self, out_sz, n_ch, up_op:UpsamplingOperation2d, id_up_op:UpsamplingOperation2d, 
-                 noise_split_strategy, in_sz=100, n_features=64, n_extra_res_blocks=1, 
-                 n_extra_convs_by_res_block=1, sn=True, bn_1st=True, upblock_cls=CondResBlockUp,
-                 **kwargs):
+    def __init__(self, out_sz:int, n_ch:int, up_op:UpsamplingOperation2d, id_up_op:UpsamplingOperation2d, 
+                 noise_split_strategy:NoiseSplitStrategy, in_sz=100, n_features=64, 
+                 n_extra_res_blocks=1, n_extra_convs_by_res_block=1, sn=True, bn_1st=True, 
+                 upblock_cls=CondResBlockUp, **kwargs):
         super().__init__()
         self.noise_split_strategy = noise_split_strategy
         cur_sz, cur_ftrs = self.init_sz, n_features//2
@@ -137,6 +192,7 @@ class CondResGenerator(nn.Module):
 
     
 class SkipGenerator(nn.Module):
+    "Residual generator with skip connections that follow StyleGAN structure."
     def __init__(self, out_sz, n_ch, up_op:UpsamplingOperation2d, id_up_op:UpsamplingOperation2d,
                  in_sz=100, n_features=64, n_extra_res_blocks=1, n_extra_convs_by_res_block=1,
                  sn=True, bn_1st=True, upblock_cls=ResBlockUp, upsample_skips_mode='nearest',
@@ -193,11 +249,11 @@ class CycleGenerator(nn.Module):
         return out_b, out_a
     
 
-def res_critic(in_size, n_channels, down_op, id_down_op, n_features=64, n_extra_res_blocks=1, 
-               norm_type=NormType.Batch, n_extra_convs_by_res_block=0, sn=True, bn_1st=True,
-               downblock_cls=ResBlockDown, flatten_full=False, include_minibatch_std=False,
-               **kwargs):
-    "A basic critic for images `n_channels` x `in_size` x `in_size`."
+def res_critic(in_size, n_channels, down_op:DownsamplingOperation2d, id_down_op:DownsamplingOperation2d, 
+               n_features=64, n_extra_res_blocks=1, norm_type=NormType.Batch, n_extra_convs_by_res_block=0, 
+               sn=True, bn_1st=True, downblock_cls=ResBlockDown, flatten_full=False, 
+               include_minibatch_std=False, **kwargs):
+    "A residual critic for images `n_channels` x `in_size` x `in_size`."
     layers = [down_op.get_layer(n_channels, n_features, norm_type=None, **kwargs)]
     cur_size, cur_ftrs = in_size//2, n_features
     layers += [ResBlock(1, cur_ftrs, cur_ftrs, norm_type=norm_type, bn_1st=bn_1st, **kwargs) 
@@ -220,10 +276,11 @@ def res_critic(in_size, n_channels, down_op, id_down_op, n_features=64, n_extra_
     return critic
 
 
-def patch_res_critic(in_sz, n_channels, out_sz, down_op, id_down_op, n_features=64, n_extra_res_blocks=1, 
+def patch_res_critic(in_sz, n_channels, out_sz, down_op:DownsamplingOperation2d, 
+                     id_down_op:DownsamplingOperation2d, n_features=64, n_extra_res_blocks=1, 
                      norm_type=NormType.Batch, n_extra_convs_by_res_block=0, sn=True, bn_1st=True,
                      downblock_cls=ResBlockDown, flatten_full=False, **kwargs):
-    "A patch critic for images `n_channels` x `in_sz` x `in_sz`."
+    "A residual patch critic for images `n_channels` x `in_sz` x `in_sz`."
     layers = [down_op.get_layer(n_channels, n_features, norm_type=None, **kwargs)]
     cur_sz, cur_ftrs = in_sz//2, n_features
     layers += [ResBlock(1, cur_ftrs, cur_ftrs, norm_type=norm_type, bn_1st=bn_1st, **kwargs) 
@@ -265,6 +322,7 @@ def _adapt_sequential_critic_as_encoder(base_net, out_sz):
 
 
 def default_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
+    "Residual encoder that transforms a tensor of size `(n_ch, img_sz, img_sz)` to `out_sz`."
     leakyReLU02 = partial(nn.LeakyReLU, negative_slope=0.2)
     down_op = ConvHalfDownsamplingOp2d(ks=4, act_cls=leakyReLU02, bn_1st=False,
                                        norm_type=norm_type)
@@ -278,6 +336,7 @@ def default_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
 
   
 def basic_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
+    "Simple encoder that transforms a tensor of size `(n_ch, img_sz, img_sz)` to `out_sz`."
     leakyReLU02 = partial(nn.LeakyReLU, negative_slope=0.2)
     down_op = ConvHalfDownsamplingOp2d(ks=4, act_cls=leakyReLU02, bn_1st=False,
                                        norm_type=norm_type)
@@ -292,6 +351,7 @@ def basic_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
 
 
 def default_decoder(img_sz, n_ch, in_sz, norm_type=NormType.Instance, hooks_by_sz=None):
+    "Residual decoder that transforms a tensor of size `in_sz` to `(n_ch, img_sz, img_sz)`."
     up_op = ConvX2UpsamplingOp2d(ks=4, act_cls=nn.ReLU, bn_1st=False, norm_type=norm_type)
     id_up_op = InterpConvUpsamplingOp2d(ks=3, act_cls=None, norm_type=norm_type)
     decoder = res_generator(img_sz, n_ch, up_op, id_up_op, in_sz=in_sz, bn_1st=False, 
@@ -300,6 +360,24 @@ def default_decoder(img_sz, n_ch, in_sz, norm_type=NormType.Instance, hooks_by_s
 
 
 class Img2ImgGenerator(nn.Sequential):
+    """A generator from and to images of size `n_ch` x `in_sz` x `in_sz`.
+    
+    Args:
+        in_sz (int): size of each one of the two spatial dimensions of the input and
+            output (squared images are assumed).
+        n_ch (int): number of channels of the images.
+        latent_sz: size of the output of the encoder.
+        encoder (nn.Module): module that transforms the input to a latent of size
+            `latent_sz`.
+        decoder_builder (Callable): callable that returns the decoder. Its parameters 
+            are `in_sz`, `n_ch`, `latent_sz` and `hooks_by_sz`; the return value must be 
+            a module that transforms a tensor of size `latent_sz` to an output of size 
+            `(n_ch, in_sz, in_sz)`.
+        mid_mlp_depth: number of blocks (Lin-ReLU-BN) of the MLP that connects the encoder
+            and the decoder. If zero, no MLP is included.
+        skip_connect: if True, adds skip connections between equivalent layers of the encoder 
+            and decoder.
+    """
     def __init__(self, in_sz, n_ch, latent_sz=100, encoder=None, decoder_builder=None, 
                  mid_mlp_depth=0, skip_connect=False):
         if encoder is None: encoder = default_encoder(in_sz, n_ch, latent_sz)

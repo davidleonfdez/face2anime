@@ -10,6 +10,7 @@ __all__ = ['FeaturesCalculator']
 
 
 class FeaturesCalculator:
+    "Helps calculate intermediate feature maps of a vgg network."
     def __init__(self, vgg_style_layers_idx:List[int], vgg_content_layers_idx:List[int],
                  vgg:nn.Module=None, input_norm_tf=None, device:torch.device=None):
         self.vgg = vgg19(pretrained=True) if vgg is None else vgg

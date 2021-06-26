@@ -3,7 +3,7 @@ from fastai.vision.all import *
 from fastai.vision.gan import *
 import pandas as pd
 import torch
-from typing import Callable
+from typing import Callable, List
 
 
 __all__ = ['random_epsilon_gp_sampler', 'GANGPCallback', 'R1GANGPCallback', 
@@ -14,12 +14,24 @@ __all__ = ['random_epsilon_gp_sampler', 'GANGPCallback', 'R1GANGPCallback',
 
 
 def random_epsilon_gp_sampler(real: torch.Tensor, fake: torch.Tensor) -> torch.Tensor:
+    "Creates a tensor containing a batch of random epsilon values to be used by WGAN-GP loss."
     # A different random value of epsilon for any element of a batch
     epsilon_vec = torch.rand(real.shape[0], 1, 1, 1, dtype=torch.float, device=real.device, requires_grad=False)
     return epsilon_vec.expand_as(real)
 
 
 class GANGPCallback(Callback):
+    """Adds a GP to the loss of the critic of the GANLearner this callback is attached to.
+    
+    It implements the original gradient penalty as defined in "Improved Training of 
+    Wasserstein GANs" (https://arxiv.org/abs/1704.00028).
+    Args:
+        plambda (float): weight of the GP
+        epsilon_sampler (Callable): must return a tensor containing a batch of random epsilon 
+            values. Epsilon is the weight that multiplies a real in the interpolation between 
+            a real and a fake image. By default (if None), random_epsilon_gp_sampler is taken.
+        center_val: value of the norm of the gradients that makes the GP minimum (zero).
+    """
     def __init__(self, plambda=10., epsilon_sampler=None, center_val=1): 
         self.plambda = plambda
         if epsilon_sampler is None: epsilon_sampler = random_epsilon_gp_sampler
@@ -47,7 +59,12 @@ class GANGPCallback(Callback):
 
 
 class R1GANGPCallback(Callback):
-    def __init__(self, weight=10., critic=None): 
+    """Adds a R1 GP to the loss of critic of the GANLearner this callback is attached to.
+    
+    It implements the R1 gradient penalty defined in "Which Training Methods for GANs do 
+    actually Converge?" (https://arxiv.org/abs/1801.04406).
+    """
+    def __init__(self, weight=10., critic:nn.Module=None): 
         self.weight = weight
         self.critic = critic
         
@@ -88,7 +105,7 @@ def repelling_reg_term(ftr_map, weight):
 
 class RepellingRegCallback(Callback):
     "Increases the G loss every iteration with a repelling regularization term."
-    def __init__(self, module, weight=1.):
+    def __init__(self, module:nn.Module, weight=1.):
         self.hook = hook_output(module, detach=False)
         self.weight = weight
         self.history = []
@@ -104,7 +121,9 @@ class RepellingRegCallback(Callback):
 
 
 class ContentLossCallback(Callback):
-    def __init__(self, weight=1., ftrs_calc=None, device=None, content_loss_func=None):
+    "Adds a content loss term to the G loss of the GANLearner this callback is attached to."
+    def __init__(self, weight=1., ftrs_calc:FeaturesCalculator=None, device=None, 
+                 content_loss_func:Callable=None):
         self.weight = weight
         self.content_loss_func = (nn.MSELoss(reduction='mean') if content_loss_func is None
                                   else content_loss_func)
@@ -124,7 +143,7 @@ class ContentLossCallback(Callback):
 
 
 class CycleGANLoss(GANModule):
-    "Wrapper around GANLoss that handles inputs, target and G outputs containing two items."
+    "Wrapper around `GANLoss` that handles inputs, targets and G outputs containing two items."
     def __init__(self, gan_loss:GANLoss):
         super().__init__()
         self.gen_loss_func = gan_loss.gen_loss_func
@@ -149,7 +168,7 @@ class CycleGANLoss(GANModule):
 
 
 class CycleConsistencyLoss:
-    def __init__(self, g_a2b, g_b2a, loss_func=None):
+    def __init__(self, g_a2b:nn.Module, g_b2a:nn.Module, loss_func:Callable=None):
         self.g_a2b = g_a2b
         self.g_b2a = g_b2a
         self.loss_func = nn.L1Loss() if loss_func is None else loss_func
@@ -163,7 +182,9 @@ class CycleConsistencyLoss:
         
 
 class CycleConsistencyLossCallback(Callback):
-    def __init__(self, g_a2b, g_b2a, loss_func=None, weight=1.):
+    "Adds a cycle consistency loss term to the G loss of the GANLearner this cb is attached to."
+    def __init__(self, g_a2b:nn.Module, g_b2a:nn.Module, loss_func:Callable=None, 
+                 weight=1.):
         self.loss = CycleConsistencyLoss(g_a2b, g_b2a, loss_func=loss_func)
         self.weight = weight
     
@@ -177,7 +198,7 @@ class CycleConsistencyLossCallback(Callback):
 
 
 class IdentityLoss:
-    def __init__(self, g_a2b, g_b2a, loss_func=None):
+    def __init__(self, g_a2b:nn.Module, g_b2a:nn.Module, loss_func:Callable=None):
         self.g_a2b = g_a2b
         self.g_b2a = g_b2a
         self.loss_func = nn.L1Loss() if loss_func is None else loss_func
@@ -189,6 +210,7 @@ class IdentityLoss:
 
     
 class IdentityLossCallback(Callback):
+    "Adds an identity loss term to the G loss of the GANLearner this callback is attached to."
     def __init__(self, g_a2b, g_b2a, loss_func=None, weight=1.):
         self.loss = IdentityLoss(g_a2b, g_b2a, loss_func=loss_func)
         self.weight = weight
@@ -202,9 +224,10 @@ class IdentityLossCallback(Callback):
 
 
 class LossWrapper():
-    def __init__(self, orig_loss, loss_args_interceptors=None):
+    "Callable class that wraps `orig_loss` and forwards its call args to `loss_args_interceptors`"
+    def __init__(self, orig_loss, loss_args_interceptors:List[Callable]=None):
         self.orig_loss = orig_loss
-        self.loss_args_interceptors = loss_args_interceptors or []
+        self.loss_args_interceptors = ifnone(loss_args_interceptors, [])
 
     def __call__(self, *args, **kwargs):
         for interceptor in self.loss_args_interceptors:
@@ -213,6 +236,11 @@ class LossWrapper():
 
 
 class CritPredsTracker():
+    """Interceptor of critic loss (GANLoss.critic) that stores the history of real and fake predictions.
+    
+    It's meant to be used with `LossWrapper` as an item of `loss_args_interceptors`.
+    Args:
+        reduce_batch: if True, it only stores the mean for each batch of predictions."""
     def __init__(self, reduce_batch=False):
         self.real_preds = None
         self.fake_preds = None
@@ -240,6 +268,16 @@ class CritPredsTracker():
 
 
 class MultiCritPredsTracker():
+    """Interceptor of multiple critic loss (normally CycleGANLoss.critic) that stores the history of predictions.
+    
+    It stores separately the predictions for each critic and for reals and fakes.
+    Args:
+        reduce_batch: if True, it only stores the mean for each batch of predictions.
+        group_preds: method that splits the predictions by critic. Must accept an input that 
+            has exactly the same type and structure than the output of the global critic.
+            By default, if None, it assumes the input is a tensor result of concatenating
+            the predictions of each critic.
+    """
     def __init__(self, n=2, reduce_batch=False, group_preds:Callable=None):
         assert n >= 2
         self.trackers = [CritPredsTracker(reduce_batch=reduce_batch) for _ in range(n)]

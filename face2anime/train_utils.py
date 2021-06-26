@@ -8,6 +8,13 @@ __all__ = ['EMAAverager', 'EMACallback', 'add_ema_to_gan_learner', 'custom_save_
 
 
 class EMAAverager():
+    """Callable class that calculates the EMA of a parameter.
+    
+    It can be used as the `avg_fn` parameter of `torch.optim.swa_utils.AveragedModel`
+    Args:
+        decay (float): weight of averaged value. The new value of the parameter is
+          multiplied by 1 - decay.
+    """
     def __init__(self, decay=0.999):
         self.decay = decay
         
@@ -22,6 +29,28 @@ def _default_forward_batch(model, batch, device):
     if device is not None:
         input = input.to(device)
     model(input)
+
+
+class FullyAveragedModel(torch.optim.swa_utils.AveragedModel):
+    """Extension of AveragedModel that also averages the buffers.
+    
+    To update both the parameters and the buffers, the method `update_all` should be 
+    called instead of `update_parameters`."""
+    def _update_buffers(self, model):
+        for b_swa, b_model in zip(self.module.buffers(), model.buffers()):
+            device = b_swa.device
+            b_model_ = b_model.detach().to(device)
+            if self.n_averaged == 0:
+                b_swa.detach().copy_(b_model_)
+            else:
+                b_swa.detach().copy_(self.avg_fn(b_swa.detach(), b_model_,
+                                                 self.n_averaged.to(device)))                
+
+    def update_all(self, model):
+        # Buffers must be updated first, because this method relies on n_averaged,
+        # which is updated by super().update_parameters()
+        self._update_buffers(model)
+        self.update_parameters(model)
 
 
 @torch.no_grad()
@@ -73,8 +102,25 @@ def _update_bn(loader, model, device=None, forward_batch:Callable=None):
 
 
 class EMACallback(Callback):
-    def __init__(self, ema_model, orig_model, dl, update_buffers=True, 
-                 forward_batch=None): 
+    """Updates the averaged weights of the generator of a GAN after every opt step.
+
+    It's meant to be used only with a GANLearner; i.e., an instance of this callback
+    is assumed to be attached to a GANLearner.
+    Args:
+        ema_model: AveragedModel that wraps the averaged generator module.
+        orig_model: active (not averaged) generator module, the one that's included
+            in learner.model and updated by the optimizer.
+        dl: dataloader needed to iterate over all data and make forward passes over the 
+            ema_model in order to update the running statistic of BN layers.
+        update_buffers: if True, not only parameters, but also buffers, of ema_model are 
+            averaged and updated, 
+        forward_batch (Callable): Method with params (model, batch, device) that chooses 
+            how to extract the input from every element of `dl`, transfers it to the proper 
+            device and finally makes a forward pass on the model (here `ema_model`). 
+            It's needed for updating the running statistics of BN layers.
+    """
+    def __init__(self, ema_model:FullyAveragedModel, orig_model:nn.Module, dl, 
+                 update_buffers=True, forward_batch=None): 
         self.ema_model = ema_model
         self.orig_model = orig_model
         self.dl = dl
@@ -95,30 +141,27 @@ class EMACallback(Callback):
         _update_bn(self.dl, self.ema_model, forward_batch=self.forward_batch)
         self.update_bn_pending = False
 
-
-class FullyAveragedModel(torch.optim.swa_utils.AveragedModel):
-    def _update_buffers(self, model):
-        for b_swa, b_model in zip(self.module.buffers(), model.buffers()):
-            device = b_swa.device
-            b_model_ = b_model.detach().to(device)
-            if self.n_averaged == 0:
-                b_swa.detach().copy_(b_model_)
-            else:
-                b_swa.detach().copy_(self.avg_fn(b_swa.detach(), b_model_,
-                                                 self.n_averaged.to(device)))                
-
-    def update_all(self, model):
-        # Buffers must be updated first, because this method relies on n_averaged,
-        # which is updated by super().update_parameters()
-        self._update_buffers(model)
-        self.update_parameters(model)
-
-        
-def add_ema_to_gan_learner(gan_learner, dblock, ds_path, decay=0.999, update_bn_dl_bs=64,
+   
+def add_ema_to_gan_learner(gan_learner, dblock, decay=0.999, update_bn_dl_bs=64,
                            forward_batch=None):
+    """"Creates and setups everything needed to update an alternative EMA generator.
+
+    It stores the EMA generator in `ema_model` attribute of `gan_learner`.
+    Args:
+        gan_learner (GANLearner): the learner to add the EMA generator to.
+        dblock (DataBlock): needed to create dataloaders that are independent of those 
+            of `gan_learner`, used after fit to update BN running stats of the EMA G.
+        decay: weight that multiplies averaged parameter every update.
+        update_bn_dl_bs: batch size used to update BN running stats.
+        forward_batch (Callable): Method with params (model, batch, device) that chooses 
+            how to extract the input from every element of the dataloader, transfers it 
+            to the proper device and finally makes a forward pass on the ema model. 
+            It's needed for updating the running statistics of BN layers.
+    """
     generator = gan_learner.model.generator
     ema_avg_fn = EMAAverager(decay=decay)
     gan_learner.ema_model = FullyAveragedModel(generator, avg_fn=ema_avg_fn)
+    ds_path = gan_learner.dls.path
     clean_dls = dblock.dataloaders(ds_path, path=ds_path, bs=update_bn_dl_bs)
     gan_learner.ema_model.eval().to(clean_dls.device)
     gan_learner.add_cb(EMACallback(gan_learner.ema_model, generator, clean_dls.train, 
@@ -126,6 +169,12 @@ def add_ema_to_gan_learner(gan_learner, dblock, ds_path, decay=0.999, update_bn_
 
 
 def custom_save_model(learner, filename, base_path='.'):
+    """Saves the model and optimizer state of the learner.
+    
+    The path of the generated file is base_path/learner.model_dir/filename
+    with ".pth" extension. If the learner has an EMA G model attached too,
+    a similar file with the suffix "_ema" is generated too.
+    """
     if isinstance(base_path, str): base_path = Path(base_path)
     if not isinstance(base_path, Path): raise Exception('Invalid base_path')
     file = join_path_file(filename, base_path/learner.model_dir, ext='.pth')
@@ -137,6 +186,11 @@ def custom_save_model(learner, filename, base_path='.'):
 def custom_load_model(learner, filename, with_opt=True, device=None, 
                       base_path='./models', 
                       with_ema=False, **kwargs):
+    """Loads the model and optimizer state of the learner.
+    
+    The file is expected to be placed in `base_path/filename` with ".pth"
+    extension. `kwargs` are forwarded to fastai's `load_model` method.
+    """
     if isinstance(base_path, str): base_path = Path(base_path)
     if not isinstance(base_path, Path): raise Exception('Invalid base_path')
     if device is None and hasattr(learner.dls, 'device'): device = learner.dls.device
