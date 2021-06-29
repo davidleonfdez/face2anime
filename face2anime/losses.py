@@ -139,7 +139,7 @@ class ContentLossCallback(Callback):
             loss_val = self.weight * self.content_loss_func(output_content_ftrs, input_content_ftrs)
             # Store result inside learn.loss_func to make it visible to metrics display
             self.learn.loss_func.content_loss = loss_val
-            self.learn.loss_grad += loss_val
+            if self.training: self.learn.loss_grad += loss_val
 
 
 class CycleGANLoss(GANModule):
@@ -194,7 +194,7 @@ class CycleConsistencyLossCallback(Callback):
             out_b, out_a = self.pred
             loss_val = self.weight * self.loss(in_a, in_b, out_b, out_a)
             self.learn.loss_func.cycle_loss = loss_val
-            self.learn.loss_grad += loss_val
+            if self.training: self.learn.loss_grad += loss_val
 
 
 class IdentityLoss:
@@ -220,7 +220,7 @@ class IdentityLossCallback(Callback):
             in_a, in_b = self.x
             loss_val = self.weight * self.loss(in_a, in_b)
             self.learn.loss_func.identity_loss = loss_val
-            self.learn.loss_grad += loss_val
+            if self.training: self.learn.loss_grad += loss_val
 
 
 class LossWrapper():
