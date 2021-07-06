@@ -3,7 +3,7 @@ from fastai.vision.all import *
 from fastai.vision.gan import *
 import pandas as pd
 import torch
-from typing import Callable, List
+from typing import Callable, List, Tuple, Union
 
 
 __all__ = ['random_epsilon_gp_sampler', 'GANGPCallback', 'R1GANGPCallback', 
@@ -63,8 +63,19 @@ class R1GANGPCallback(Callback):
     
     It implements the R1 gradient penalty defined in "Which Training Methods for GANs do 
     actually Converge?" (https://arxiv.org/abs/1801.04406).
+    Args
+        weight: float that multiplies the gradient penalty before adding it to the loss.
+            When there's a single real target (critic only receives one input tensor), it
+            must always be a float.
+            When there are multiple real targets (critic receives a tuple of tensors):
+                -If weight is a tuple, it should have a length equal to the length of the
+                 input of the critic.
+                -If weight is a float, the same weight will be used to multiply the 
+                 norm of the gradients of the preds w.r.t. every input.
+        critic: module used to obtain the obtain the preds later used to calculate the
+            gradients w.r.t. the input[s].
     """
-    def __init__(self, weight=10., critic:nn.Module=None): 
+    def __init__(self, weight:Union[float, Tuple[float, ...]]=10., critic:nn.Module=None): 
         self.weight = weight
         self.critic = critic
         
@@ -73,15 +84,25 @@ class R1GANGPCallback(Callback):
             # Single target case
             # Wrap with a list to handle it the same way as multiple targets case
             real = [real]
+        if not isinstance(weight, (list, tuple)): weight = [weight]
         x = [real_t.detach().requires_grad_(True) for real_t in real]
         critic = self.critic or self.model.critic
         preds = critic(*x).mean()
-
-        grads = torch.autograd.grad(outputs=preds, inputs=x, create_graph=True)[0]
-        #return weight * (grads.norm()**2)  
-        # (flat+dot product) seems more efficient than norm**2
-        flat_grads = grads.view(-1)
-        return weight * flat_grads.dot(flat_grads)
+        grads_by_input = torch.autograd.grad(outputs=preds, inputs=x, create_graph=True)
+        
+        # If there are multiple real targets (len(x) > 1) and only 1 weight is given, we'll
+        # use the same weight for every input
+        if len(x) > len(weight): weight = weight * len(x)
+        result = None
+        
+        for grads, wi in zip (grads_by_input, weight):
+            # gp = wi * (grads.norm()**2)  
+            # (flat+dot product) seems more efficient than norm**2
+            flat_grads = grads.view(-1)
+            gp = wi * flat_grads.dot(flat_grads)
+            result = gp if result is None else result + gp
+            
+        return result
         
     def after_loss(self):
         if not self.gan_trainer.gen_mode:
