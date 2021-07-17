@@ -406,3 +406,9 @@ class Img2ImgGenerator(nn.Sequential):
 
     def __del__(self):
         if hasattr(self, "hooks"): self.hooks.remove()
+
+    def get_encoder(self, include_mlp=False):
+        return nn.Sequential(*[self[i] for i in range(len(self) - 1)]) if include_mlp else self[0]
+        
+    def get_decoder(self, include_mlp=True):
+        return nn.Sequential(*[self[i] for i in range(1, len(self))]) if include_mlp else self[-1]

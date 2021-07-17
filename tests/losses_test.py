@@ -1,5 +1,5 @@
-from face2anime.losses import (ContentLossCallback, CritPredsTracker, CycleConsistencyLoss, 
-                               CycleGANLoss, IdentityLoss, LossWrapper)
+from face2anime.losses import (ContentLossCallback, CritPredsTracker, CrossIdentityLoss,
+                               CycleConsistencyLoss, CycleGANLoss, IdentityLoss, LossWrapper)
 from face2anime.networks import CycleCritic, CycleGenerator
 from fastai.vision.all import Lambda
 from fastai.vision.gan import GANLoss, GANModule, gan_loss_from_func
@@ -21,6 +21,7 @@ def test_content_loss_callback():
     cb.learn = DummyObject()
     cb.learn.loss_grad = 0.
     cb.learn.loss_func = DummyObject()
+    cb.learn.training = True
     cb.gan_trainer = DummyObject()
     cb.gan_trainer.gen_mode = False
     cb.after_loss()
@@ -91,6 +92,23 @@ def test_identity_loss():
     
     actual_loss = id_loss(in_a, in_b)
     expected_loss = (0.75 + 0.45 + 0.375 + 0.225 + 0 + 1 + 0.5 + 0.5) / 4
+    
+    assert math.isclose(actual_loss, expected_loss, abs_tol=1e-5)
+
+
+def test_cross_identity_loss():
+    enc_a = Lambda(lambda t: t*2)
+    enc_b = Lambda(lambda t: t/2)
+    dec_a = Lambda(lambda t: t+1)
+    dec_b = Lambda(lambda t: t-1)
+    id_loss = CrossIdentityLoss(enc_a, enc_b, dec_a, dec_b)
+    in_a = torch.Tensor([[1, 0.6], [0.5, 0.3]])
+    in_b = torch.Tensor([[0., 1.], [0.5, 0.5]])
+    
+    actual_loss = id_loss(in_a, in_b)
+    #expected_out_a = [[3, 2.2], [2, 1.6]]
+    #expected_out_b = [[-1, -0.5], [-0.75, -0.75]]
+    expected_loss = (2 + 1.6 + 1.5 + 1.3 + 1 + 1.5 + 1.25 + 1.25) / 4
     
     assert math.isclose(actual_loss, expected_loss, abs_tol=1e-5)
 

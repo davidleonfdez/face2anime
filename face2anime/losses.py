@@ -1,4 +1,5 @@
 from face2anime.misc import FeaturesCalculator
+from face2anime.networks import Img2ImgGenerator
 from fastai.vision.all import *
 from fastai.vision.gan import *
 import pandas as pd
@@ -9,7 +10,8 @@ from typing import Callable, List, Tuple, Union
 __all__ = ['random_epsilon_gp_sampler', 'GANGPCallback', 'R1GANGPCallback', 
            'repelling_reg_term', 'RepellingRegCallback', 'ContentLossCallback',
            'CycleGANLoss', 'CycleConsistencyLoss', 'CycleConsistencyLossCallback', 
-           'IdentityLoss', 'IdentityLossCallback', 'LossWrapper', 'CritPredsTracker',
+           'IdentityLoss', 'IdentityLossCallback', 'CrossIdentityLoss', 
+           'CrossIdentityLossCallback', 'LossWrapper', 'CritPredsTracker',
            'MultiCritPredsTracker']
 
 
@@ -229,9 +231,14 @@ class IdentityLoss:
         id_b = self.g_a2b(in_b)
         return self.loss_func(in_a, id_a) + self.loss_func(in_b, id_b)
 
-    
+ 
 class IdentityLossCallback(Callback):
-    "Adds an identity loss term to the G loss of the GANLearner this callback is attached to."
+    """Adds an identity loss term to the G loss of the GANLearner this callback is attached to.
+    
+    It incentivizes every generator to produce and output equal to the input when the input
+    belongs to its target domain. For example, the generator A->B is incentivized to produce an 
+    output equal to the input when it receives and input from domain B.
+    """
     def __init__(self, g_a2b, g_b2a, loss_func=None, weight=1.):
         self.loss = IdentityLoss(g_a2b, g_b2a, loss_func=loss_func)
         self.weight = weight
@@ -241,6 +248,51 @@ class IdentityLossCallback(Callback):
             in_a, in_b = self.x
             loss_val = self.weight * self.loss(in_a, in_b)
             self.learn.loss_func.identity_loss = loss_val
+            if self.training: self.learn.loss_grad += loss_val
+
+
+class CrossIdentityLoss:
+    def __init__(self, encoder_a:nn.Module, encoder_b:nn.Module, decoder_a:nn.Module, 
+                 decoder_b:nn.Module, loss_func:Callable=None):
+        self.encoder_a = encoder_a
+        self.encoder_b = encoder_b
+        self.decoder_a = decoder_a
+        self.decoder_b = decoder_b
+        self.loss_func = nn.L1Loss() if loss_func is None else loss_func
+        
+    def __call__(self, in_a, in_b):
+        id_a = self.decoder_a(self.encoder_a(in_a))
+        id_b = self.decoder_b(self.encoder_b(in_b))
+        return self.loss_func(in_a, id_a) + self.loss_func(in_b, id_b)
+
+
+class CrossIdentityLossCallback(Callback):
+    """Adds an identity loss term to the G loss of the GANLearner this callback is attached to.
+    
+    It incentivizes the combination of the encoder of one generator and the decoder of the
+    other to produce an output equal to the input when it receives an input from the target
+    domain of the generator that the decoder belongs to.
+    For example, the generator A->B has an encoder that is expected to produce a latent
+    representation l_i of an image a_i from domain A. If we assume the latent representation is 
+    shared between generators and holds some domain independent information (usually called 
+    "content"), we would expect the decoder of the generator B->A to be able to produce an 
+    output from domain A which is equal to a_i when given l_i as input.
+    """
+    def __init__(self, g_a2b:Img2ImgGenerator, g_b2a:Img2ImgGenerator, loss_func=None, 
+                 weight=1.):
+        encoder_a = g_a2b.get_encoder()
+        decoder_b = g_a2b.get_decoder()
+        encoder_b = g_b2a.get_encoder()
+        decoder_a = g_b2a.get_decoder()
+        self.loss = CrossIdentityLoss(encoder_a, encoder_b, decoder_a, decoder_b, 
+                                      loss_func=loss_func)
+        self.weight = weight
+    
+    def after_loss(self):
+        if self.gan_trainer.gen_mode:
+            in_a, in_b = self.x
+            loss_val = self.weight * self.loss(in_a, in_b)
+            self.learn.loss_func.cross_identity_loss = loss_val
             if self.training: self.learn.loss_grad += loss_val
 
 
