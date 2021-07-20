@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from face2anime.gen_utils import coalesce
+from face2anime.misc import FeaturesCalculator
 from fastai.vision.all import *
 import torch
 import torch.nn as nn
@@ -8,7 +9,7 @@ from typing import Callable, List, Type
 
 
 __all__ = ['ConcatPool2d', 'ConditionalBatchNorm2d', 'MiniBatchStdDev', 'CondConvLayer', 'TransformsLayer',
-           'ParamRemover', 'DownsamplingOperation2d', 'AvgPoolHalfDownsamplingOp2d', 
+           'ParamRemover', 'MeanStdFeatureMaps', 'DownsamplingOperation2d', 'AvgPoolHalfDownsamplingOp2d', 
            'ConcatPoolHalfDownsamplingOp2d', 'ConvHalfDownsamplingOp2d', 'ZeroDownsamplingOp2d',
            'UpsamplingOperation2d',  'PixelShuffleUpsamplingOp2d', 'InterpConvUpsamplingOp2d', 
            'CondInterpConvUpsamplingOp2d',  'ConvX2UpsamplingOp2d', 'CondConvX2UpsamplingOp2d', 
@@ -110,6 +111,29 @@ class ParamRemover(nn.Module):
         
     def forward(self, *args):
         return self.module(*args[:-1])
+
+
+class MeanStdFeatureMaps(nn.Module):
+    def __init__(self, in_sz, in_ch, out_ftrs=None, input_norm_tf=None):
+        super().__init__()
+        layers_idxs = [6, 11, 20]
+        self.ftrs_calc = FeaturesCalculator(layers_idxs, [],
+                                            input_norm_tf=input_norm_tf)        
+        if out_ftrs is not None:
+            with torch.no_grad():
+                test_out = self.ftrs_calc.calc_style(torch.rand(1, in_ch, in_sz, in_sz))
+            n_total_ftr_maps = 2 * sum([ftrs.shape[1] for ftrs in test_out])
+            self.linear = spectral_norm(nn.Linear(n_total_ftr_maps, out_ftrs))
+        else:
+            self.linear = None
+          
+    def forward(self, x):
+        ftrs_by_layer = self.ftrs_calc.calc_style(x)
+        means = [ftrs.mean(axis=(2, 3)) for ftrs in ftrs_by_layer]
+        stds = [ftrs.std(axis=(2, 3)) for ftrs in ftrs_by_layer]
+        out = torch.cat(means + stds, axis=1)
+        if self.linear is not None: out = self.linear(out)
+        return out
 
 
 class CondConvLayer(nn.Module):

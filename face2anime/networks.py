@@ -7,15 +7,16 @@ from torch.nn.utils import spectral_norm
 
 from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondConvX2UpsamplingOp2d, CondResBlockUp, 
                                ConvHalfDownsamplingOp2d, ConvX2UpsamplingOp2d, DownsamplingOperation2d, 
-                               InterpConvUpsamplingOp2d, MiniBatchStdDev, ParamRemoverUpsamplingOp2d, 
-                               ResBlockDown, ResBlockUp, UpsamplingOperation2d, ZeroDownsamplingOp2d)
+                               InterpConvUpsamplingOp2d, MeanStdFeatureMaps, MiniBatchStdDev, 
+                               ParamRemoverUpsamplingOp2d, ResBlockDown, ResBlockUp, 
+                               UpsamplingOperation2d, ZeroDownsamplingOp2d)
 from face2anime.torch_utils import add_sn
 
 
 __all__ = ['custom_generator', 'res_generator', 'NoiseSplitStrategy', 'NoiseSplitEqualLeave1stOutStrategy', 
            'NoiseSplitDontSplitStrategy', 'CondResGenerator', 'SkipGenerator', 'CycleGenerator', 'res_critic', 
-           'patch_res_critic', 'CycleCritic', 'default_encoder', 'basic_encoder', 'default_decoder', 
-           'Img2ImgGenerator']
+           'patch_res_critic', 'PatchResCritic', 'CycleCritic', 'default_encoder', 'basic_encoder', 
+           'default_decoder', 'Img2ImgGenerator']
 
 
 def custom_generator(out_size, n_channels, up_op:UpsamplingOperation2d, in_sz=100, 
@@ -268,19 +269,18 @@ def res_critic(in_size, n_channels, down_op:DownsamplingOperation2d, id_down_op:
         # it may not make sense when using BN, although it, unlike BN, calculates a different
         # stdev for any spatial position.
         layers.append(MiniBatchStdDev())
-        cur_ftrs += 1
-    #layers += [init_default(nn.Conv2d(cur_ftrs, 1, 4, padding=0, bias=False), init), Flatten()]    
+        cur_ftrs += 1  
     layers += [init_default(nn.Conv2d(cur_ftrs, 1, 4, padding=0), init), Flatten(full=flatten_full)]
     critic =  nn.Sequential(*layers)
     if sn: add_sn(critic)
     return critic
 
 
-def patch_res_critic(in_sz, n_channels, out_sz, down_op:DownsamplingOperation2d, 
-                     id_down_op:DownsamplingOperation2d, n_features=64, n_extra_res_blocks=1, 
-                     norm_type=NormType.Batch, n_extra_convs_by_res_block=0, sn=True, bn_1st=True,
-                     downblock_cls=ResBlockDown, flatten_full=False, **kwargs):
-    "A residual patch critic for images `n_channels` x `in_sz` x `in_sz`."
+def _build_patch_res_c_main_layers(in_sz, n_channels, out_sz, down_op:DownsamplingOperation2d, 
+                                   id_down_op:DownsamplingOperation2d, n_features=64, 
+                                   n_extra_res_blocks=1, norm_type=NormType.Batch, 
+                                   n_extra_convs_by_res_block=0, sn=True, bn_1st=True,
+                                   downblock_cls=ResBlockDown, flatten_full=False, **kwargs):
     layers = [down_op.get_layer(n_channels, n_features, norm_type=None, **kwargs)]
     cur_sz, cur_ftrs = in_sz//2, n_features
     layers += [ResBlock(1, cur_ftrs, cur_ftrs, norm_type=norm_type, bn_1st=bn_1st, **kwargs) 
@@ -292,9 +292,55 @@ def patch_res_critic(in_sz, n_channels, out_sz, down_op:DownsamplingOperation2d,
         cur_ftrs *= 2 ; cur_sz //= 2
     init = kwargs.get('init', nn.init.kaiming_normal_)
     layers += [init_default(nn.Conv2d(cur_ftrs, 1, 3, padding=1), init), Flatten(full=flatten_full)]
-    critic =  nn.Sequential(*layers)
-    if sn: add_sn(critic)
+    module = nn.Sequential(*layers)
+    if sn: add_sn(module)
+    return module
+
+
+def patch_res_critic(in_sz, n_channels, out_sz, down_op:DownsamplingOperation2d, 
+                     id_down_op:DownsamplingOperation2d, n_features=64, n_extra_res_blocks=1, 
+                     norm_type=NormType.Batch, n_extra_convs_by_res_block=0, sn=True, bn_1st=True,
+                     downblock_cls=ResBlockDown, flatten_full=False, **kwargs):
+    "Preserved for backwards compatibility. Use `PatchResCritic` instead"
+    critic = _build_patch_res_c_main_layers(
+        in_sz, n_channels, out_sz, down_op, id_down_op, n_features=n_features, 
+        n_extra_res_blocks=n_extra_res_blocks, norm_type=norm_type, 
+        n_extra_convs_by_res_block=n_extra_convs_by_res_block, sn=sn, bn_1st=bn_1st,
+        downblock_cls=downblock_cls, flatten_full=flatten_full, **kwargs)
     return critic
+
+
+class PatchResCritic(nn.Module):
+    "A residual patch critic for images `n_channels` x `in_sz` x `in_sz`."    
+    def __init__(self, in_sz, n_channels, out_sz, down_op:DownsamplingOperation2d, 
+                 id_down_op:DownsamplingOperation2d, n_features=64, n_extra_res_blocks=1, 
+                 norm_type=NormType.Batch, n_extra_convs_by_res_block=0, sn=True, bn_1st=True,
+                 downblock_cls=ResBlockDown, flatten_full=False, include_meanstd_layer=False,
+                 input_norm_tf=None, **kwargs):
+        super().__init__()
+        
+        first_flatten_full = flatten_full and not include_meanstd_layer        
+        self.main_layers = _build_patch_res_c_main_layers(
+            in_sz, n_channels, out_sz, down_op, id_down_op, n_features=n_features, 
+            n_extra_res_blocks=n_extra_res_blocks, norm_type=norm_type, 
+            n_extra_convs_by_res_block=n_extra_convs_by_res_block, sn=sn, bn_1st=bn_1st,
+            downblock_cls=downblock_cls, flatten_full=first_flatten_full, **kwargs)
+
+        if include_meanstd_layer:
+            # out_ftrs could be a different number, we just opt to make it coincide with the number of out patches
+            self.mean_std_ftrs = MeanStdFeatureMaps(in_sz, n_channels, input_norm_tf=input_norm_tf,
+                                                    out_ftrs=out_sz**2)
+            self.final_flatten = Flatten(full=True) if flatten_full else nn.Identity()
+        else:
+            self.mean_std_ftrs = None
+            self.final_flatten = None
+    
+    def forward(self, x):
+        out = self.main_layers(x)
+        if self.mean_std_ftrs is not None:
+            out = torch.cat([out, self.mean_std_ftrs(x)], axis=1)
+            out = self.final_flatten(out)
+        return out
 
 
 class CycleCritic(nn.Module):

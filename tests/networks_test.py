@@ -4,7 +4,7 @@ from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondConvX2Upsampl
 from face2anime.networks import (basic_encoder, CondResGenerator, custom_generator, 
                                  Img2ImgGenerator, NoiseSplitDontSplitStrategy, 
                                  NoiseSplitEqualLeave1stOutStrategy, patch_res_critic,
-                                 res_critic, res_generator, SkipGenerator)
+                                 PatchResCritic, res_critic, res_generator, SkipGenerator)
 from face2anime.torch_utils import every_conv_has_sn
 from fastai.vision.all import NormType
 import pytest
@@ -112,7 +112,7 @@ def test_res_critic(in_sz, n_ch, n_ftrs):
 @pytest.mark.parametrize("n_ch", [1, 3])
 @pytest.mark.parametrize("n_ftrs", [16, 32])
 @pytest.mark.parametrize("out_sz", [4, 8])
-def test_patch_res_critic(in_sz, n_ch, n_ftrs, out_sz):
+def test_old_patch_res_critic(in_sz, n_ch, n_ftrs, out_sz):
     down_op = ConvHalfDownsamplingOp2d()
     id_down_op = ConcatPoolHalfDownsamplingOp2d()
     crit_args = [in_sz, n_ch, out_sz, down_op, id_down_op]
@@ -127,6 +127,31 @@ def test_patch_res_critic(in_sz, n_ch, n_ftrs, out_sz):
     assert every_conv_has_sn(crit)
     assert out.size() == torch.Size([bs, out_sz**2])
     assert flat_out.size() == torch.Size([bs * out_sz**2])
+
+
+@pytest.mark.parametrize("in_sz", [32, 64])
+@pytest.mark.parametrize("n_ftrs", [16, 32])
+@pytest.mark.parametrize("out_sz", [4, 8])
+@pytest.mark.parametrize("include_meanstd_layer", [True, False])
+def test_patch_res_critic(in_sz, n_ftrs, out_sz, include_meanstd_layer):
+    n_ch = 3
+    down_op = ConvHalfDownsamplingOp2d()
+    id_down_op = ConcatPoolHalfDownsamplingOp2d()
+    crit_args = [in_sz, n_ch, out_sz, down_op, id_down_op]
+    crit = PatchResCritic(*crit_args, n_features=n_ftrs, flatten_full=False,
+                          include_meanstd_layer=include_meanstd_layer)
+    crit_flat_out = PatchResCritic(*crit_args, n_features=n_ftrs, flatten_full=True,
+                                   include_meanstd_layer=include_meanstd_layer)
+
+    bs = randint(1, 5)
+    in_t = torch.rand(bs, n_ch, in_sz, in_sz)
+    out = crit(in_t)
+    flat_out = crit_flat_out(in_t)
+    meanstd_mult = 2 if include_meanstd_layer else 1
+
+    assert every_conv_has_sn(crit)
+    assert out.size() == torch.Size([bs, out_sz**2 * meanstd_mult])
+    assert flat_out.size() == torch.Size([bs * out_sz**2 * meanstd_mult])
 
 
 @pytest.mark.parametrize("in_sz", [32, 64])
