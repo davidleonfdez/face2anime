@@ -316,7 +316,7 @@ class PatchResCritic(nn.Module):
                  id_down_op:DownsamplingOperation2d, n_features=64, n_extra_res_blocks=1, 
                  norm_type=NormType.Batch, n_extra_convs_by_res_block=0, sn=True, bn_1st=True,
                  downblock_cls=ResBlockDown, flatten_full=False, include_meanstd_layer=False,
-                 input_norm_tf=None, **kwargs):
+                 input_norm_tf=None, device=None, **kwargs):
         super().__init__()
         
         first_flatten_full = flatten_full and not include_meanstd_layer        
@@ -329,7 +329,7 @@ class PatchResCritic(nn.Module):
         if include_meanstd_layer:
             # out_ftrs could be a different number, we just opt to make it coincide with the number of out patches
             self.mean_std_ftrs = MeanStdFeatureMaps(in_sz, n_channels, input_norm_tf=input_norm_tf,
-                                                    out_ftrs=out_sz**2)
+                                                    out_ftrs=out_sz**2, device=device)
             self.final_flatten = Flatten(full=True) if flatten_full else nn.Identity()
         else:
             self.mean_std_ftrs = None
@@ -410,7 +410,7 @@ class Img2ImgGenerator(nn.Sequential):
     
     Args:
         in_sz (int): size of each one of the two spatial dimensions of the input and
-            output (squared images are assumed).
+            output (square images are assumed).
         n_ch (int): number of channels of the images.
         latent_sz: size of the output of the encoder.
         encoder (nn.Module): module that transforms the input to a latent of size

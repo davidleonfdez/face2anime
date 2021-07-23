@@ -114,14 +114,15 @@ class ParamRemover(nn.Module):
 
 
 class MeanStdFeatureMaps(nn.Module):
-    def __init__(self, in_sz, in_ch, out_ftrs=None, input_norm_tf=None):
+    def __init__(self, in_sz, in_ch, out_ftrs=None, input_norm_tf=None, device=None):
         super().__init__()
         layers_idxs = [6, 11, 20]
         self.ftrs_calc = FeaturesCalculator(layers_idxs, [],
-                                            input_norm_tf=input_norm_tf)        
+                                            input_norm_tf=input_norm_tf,
+                                            device=device)        
         if out_ftrs is not None:
             with torch.no_grad():
-                test_out = self.ftrs_calc.calc_style(torch.rand(1, in_ch, in_sz, in_sz))
+                test_out = self.ftrs_calc.calc_style(torch.rand(1, in_ch, in_sz, in_sz, device=device))
             n_total_ftr_maps = 2 * sum([ftrs.shape[1] for ftrs in test_out])
             self.linear = spectral_norm(nn.Linear(n_total_ftr_maps, out_ftrs))
         else:

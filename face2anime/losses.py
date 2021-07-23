@@ -291,6 +291,9 @@ class CrossIdentityLossCallback(Callback):
     def after_loss(self):
         if self.gan_trainer.gen_mode:
             in_a, in_b = self.x
+            # It could be optimized to pass latents too (and save half forward time)
+            # using hooks, but it would require careful callbacks ordering, given that other
+            # callback could forward G with non real images before this cb is executed.
             loss_val = self.weight * self.loss(in_a, in_b)
             self.learn.loss_func.cross_identity_loss = loss_val
             if self.training: self.learn.loss_grad += loss_val
