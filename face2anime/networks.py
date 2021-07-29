@@ -7,7 +7,7 @@ from torch.nn.utils import spectral_norm
 
 from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondConvX2UpsamplingOp2d, CondResBlockUp, 
                                ConvHalfDownsamplingOp2d, ConvX2UpsamplingOp2d, DownsamplingOperation2d, 
-                               InterpConvUpsamplingOp2d, MeanStdFeatureMaps, MiniBatchStdDev, 
+                               InterpConvUpsamplingOp2d, MeanStdPretrainedFeatures, MiniBatchStdDev, 
                                ParamRemoverUpsamplingOp2d, ResBlockDown, ResBlockUp, 
                                UpsamplingOperation2d, ZeroDownsamplingOp2d)
 from face2anime.torch_utils import add_sn
@@ -328,8 +328,10 @@ class PatchResCritic(nn.Module):
 
         if include_meanstd_layer:
             # out_ftrs could be a different number, we just opt to make it coincide with the number of out patches
-            self.mean_std_ftrs = MeanStdFeatureMaps(in_sz, n_channels, input_norm_tf=input_norm_tf,
-                                                    out_ftrs=out_sz**2, device=device)
+            # include_std=False causes exploding gradients
+            self.mean_std_ftrs = MeanStdPretrainedFeatures(in_sz, n_channels, input_norm_tf=input_norm_tf,
+                                                           out_ftrs=out_sz**2, device=device, 
+                                                           include_std=False)
             self.final_flatten = Flatten(full=True) if flatten_full else nn.Identity()
         else:
             self.mean_std_ftrs = None
@@ -382,7 +384,7 @@ def default_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
 
   
 def basic_encoder(img_sz, n_ch, out_sz, norm_type=NormType.Instance):
-    "Simple encoder that transforms a tensor of size `(n_ch, img_sz, img_sz)` to `out_sz`."
+    "Basic encoder w/o pooling layers that transforms a tensor of size `(n_ch, img_sz, img_sz)` to `out_sz`."
     leakyReLU02 = partial(nn.LeakyReLU, negative_slope=0.2)
     down_op = ConvHalfDownsamplingOp2d(ks=4, act_cls=leakyReLU02, bn_1st=False,
                                        norm_type=norm_type)
