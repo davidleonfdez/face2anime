@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from torch.nn.utils import spectral_norm
 from torch.nn.utils.spectral_norm import SpectralNorm
@@ -5,7 +6,7 @@ from typing import Union, Tuple
 
 
 __all__ = ['is_conv', 'has_sn_hook', 'every_conv_has_sn', 'get_mean_weights', 
-           'add_sn', 'set_sn_to_every_conv']
+           'add_sn', 'set_sn_to_every_conv', 'vectorize_upper_diag']
 
 
 conv_types = [nn.Conv1d, nn.Conv2d, nn.Conv3d,
@@ -65,3 +66,13 @@ def set_sn_to_every_conv(m:nn.Module):
                 setattr(m, attr_name, spectral_norm(attr_value))
             elif isinstance(attr_value, nn.Module) and (len(list(attr_value.children())) > 0):
                 set_sn_to_every_conv(attr_value)
+
+
+def vectorize_upper_diag(t, offset=0):
+    rank = len(t.shape)
+    assert rank in (2, 3)
+    upper_diag_idxs = [*torch.triu_indices(*t.shape[-2:], offset=offset)]
+    if rank == 2:
+        return t[upper_diag_idxs]
+    if rank == 3:
+        return t[:, upper_diag_idxs[0], upper_diag_idxs[1]]

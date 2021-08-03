@@ -7,8 +7,8 @@ from torch.nn.utils import spectral_norm
 
 from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondConvX2UpsamplingOp2d, CondResBlockUp, 
                                ConvHalfDownsamplingOp2d, ConvX2UpsamplingOp2d, DownsamplingOperation2d, 
-                               InterpConvUpsamplingOp2d, MeanStdPretrainedFeatures, MiniBatchStdDev, 
-                               ParamRemoverUpsamplingOp2d, ResBlockDown, ResBlockUp, 
+                               FeaturesStats, FeatureStatType, FeaturesStatsSource, InterpConvUpsamplingOp2d, 
+                               MiniBatchStdDev, ParamRemoverUpsamplingOp2d, ResBlockDown, ResBlockUp, 
                                UpsamplingOperation2d, ZeroDownsamplingOp2d)
 from face2anime.torch_utils import add_sn
 
@@ -315,23 +315,28 @@ class PatchResCritic(nn.Module):
     def __init__(self, in_sz, n_channels, out_sz, down_op:DownsamplingOperation2d, 
                  id_down_op:DownsamplingOperation2d, n_features=64, n_extra_res_blocks=1, 
                  norm_type=NormType.Batch, n_extra_convs_by_res_block=0, sn=True, bn_1st=True,
-                 downblock_cls=ResBlockDown, flatten_full=False, include_meanstd_layer=False,
-                 input_norm_tf=None, device=None, **kwargs):
+                 downblock_cls=ResBlockDown, flatten_full=False, ftrs_stats=FeatureStatType.NONE, 
+                 input_norm_tf=None, device=None, ftrs_stats_source:FeaturesStatsSource=None, **kwargs):
         super().__init__()
         
-        first_flatten_full = flatten_full and not include_meanstd_layer        
+        include_stats_layer = ftrs_stats not in (None, FeatureStatType.NONE)
+        first_flatten_full = flatten_full and not include_stats_layer        
         self.main_layers = _build_patch_res_c_main_layers(
             in_sz, n_channels, out_sz, down_op, id_down_op, n_features=n_features, 
             n_extra_res_blocks=n_extra_res_blocks, norm_type=norm_type, 
             n_extra_convs_by_res_block=n_extra_convs_by_res_block, sn=sn, bn_1st=bn_1st,
             downblock_cls=downblock_cls, flatten_full=first_flatten_full, **kwargs)
+        if device is not None: self.main_layers.to(device)
 
-        if include_meanstd_layer:
+        if include_stats_layer:
+            if ftrs_stats_source != None: 
+                ftrs_stats_source.set_parent(self.main_layers)
             # out_ftrs could be a different number, we just opt to make it coincide with the number of out patches
-            # include_std=False causes exploding gradients
-            self.mean_std_ftrs = MeanStdPretrainedFeatures(in_sz, n_channels, input_norm_tf=input_norm_tf,
-                                                           out_ftrs=out_sz**2, device=device, 
-                                                           include_std=False)
+            # including std causes exploding gradients
+            self.mean_std_ftrs = FeaturesStats(in_sz, n_channels, input_norm_tf=input_norm_tf,
+                                               out_ftrs=out_sz**2, device=device,
+                                               ftrs_stats=ftrs_stats,
+                                               ftrs_stats_source=ftrs_stats_source)
             self.final_flatten = Flatten(full=True) if flatten_full else nn.Identity()
         else:
             self.mean_std_ftrs = None

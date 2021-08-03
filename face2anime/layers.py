@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
+from enum import auto, Flag
 from face2anime.gen_utils import coalesce
-from face2anime.misc import FeaturesCalculator
+from face2anime.misc import FeaturesCalculator, gram_matrix
+from face2anime.torch_utils import vectorize_upper_diag
 from fastai.vision.all import *
 import torch
 import torch.nn as nn
@@ -9,13 +11,13 @@ from typing import Callable, List, Type
 
 
 __all__ = ['ConcatPool2d', 'ConditionalBatchNorm2d', 'MiniBatchStdDev', 'CondConvLayer', 'TransformsLayer',
-           'ParamRemover', 'MeanStdPretrainedFeatures', 'DownsamplingOperation2d', 'AvgPoolHalfDownsamplingOp2d', 
-           'ConcatPoolHalfDownsamplingOp2d', 'ConvHalfDownsamplingOp2d', 'ZeroDownsamplingOp2d',
-           'UpsamplingOperation2d',  'PixelShuffleUpsamplingOp2d', 'InterpConvUpsamplingOp2d', 
-           'CondInterpConvUpsamplingOp2d',  'ConvX2UpsamplingOp2d', 'CondConvX2UpsamplingOp2d', 
-           'ParamRemoverUpsamplingOp2d', 'MiniResBlock', 'ResBlockUp', 'RescaledResBlockUp', 
-           'DenseBlockUp', 'CondResBlockUp', 'ResBlockDown', 'RescaledResBlockDown', 'PseudoDenseBlockDown', 
-           'DenseBlockDown']
+           'ParamRemover', 'FeatureStatType', 'PretrainedVGGSource', 'ParentNetSource', 'FeaturesStats', 
+           'DownsamplingOperation2d', 'AvgPoolHalfDownsamplingOp2d', 'ConcatPoolHalfDownsamplingOp2d', 
+           'ConvHalfDownsamplingOp2d', 'ZeroDownsamplingOp2d','UpsamplingOperation2d',  
+           'PixelShuffleUpsamplingOp2d', 'InterpConvUpsamplingOp2d', 'CondInterpConvUpsamplingOp2d',  
+           'ConvX2UpsamplingOp2d', 'CondConvX2UpsamplingOp2d', 'ParamRemoverUpsamplingOp2d', 'MiniResBlock', 
+           'ResBlockUp', 'RescaledResBlockUp', 'DenseBlockUp', 'CondResBlockUp', 'ResBlockDown', 
+           'RescaledResBlockDown', 'PseudoDenseBlockDown', 'DenseBlockDown']
 
 
 class ConcatPool2d(nn.Module):
@@ -113,34 +115,100 @@ class ParamRemover(nn.Module):
         return self.module(*args[:-1])
 
 
-class MeanStdPretrainedFeatures(nn.Module):
+class FeatureStatType(Flag):
+    NONE = 0
+    MEAN = auto()
+    STD = auto()
+    CORRELATIONS = auto()
+
+
+class FeaturesStatsSource(ABC):
+    @abstractmethod
+    def get_ftrs(self, x) -> List[nn.Module]:
+        pass
+
+    @property
+    def set_parent(self, parent:nn.Module):
+        pass
+
+
+class PretrainedVGGSource(FeaturesStatsSource):
+    def __init__(self, ftrs_calc=None, input_norm_tf=None, device=None):
+        if ftrs_calc is None:
+            layers_idxs = [6, 11, 20]
+            ftrs_calc = FeaturesCalculator(layers_idxs, [],
+                                           input_norm_tf=input_norm_tf,
+                                           device=device)
+        self.ftrs_calc = ftrs_calc
+
+    def get_ftrs(self, x):
+        return self.ftrs_calc.calc_style(x)
+
+
+class ParentNetSource(FeaturesStatsSource):
+    def __init__(self, layer_types=None):
+        if layer_types is None: layer_types = nn.Conv2d
+        self.layer_types = layer_types
+
+    def set_parent(self, parent:nn.Module):
+        self.parent = parent
+        layers = [m for m in parent.modules() if isinstance(m, self.layer_types)]
+        self.hooks = hook_outputs(layers)
+
+    def get_ftrs(self, x):
+        self.parent(x)
+        return [h.stored for h in self.hooks]
+
+    def __del__(self):
+        if hasattr(self, 'hooks'): self.hooks.remove()
+
+
+class FeaturesStats(nn.Module):
+    "Returns statistics from intermediate feature maps obtained when forwarding input through a certain network."
     def __init__(self, in_sz, in_ch, out_ftrs=None, input_norm_tf=None, device=None,
-                 include_std=True):
+                 ftrs_stats=FeatureStatType.MEAN, ftrs_stats_source:FeaturesStatsSource=None):
         super().__init__()
-        layers_idxs = [6, 11, 20]
-        self.ftrs_calc = FeaturesCalculator(layers_idxs, [],
-                                            input_norm_tf=input_norm_tf,
-                                            device=device)  
-        self.include_std = include_std
-        
-        if out_ftrs is not None:
+        assert ftrs_stats not in (None, FeatureStatType.NONE)
+        self.include_mean = FeatureStatType.MEAN in ftrs_stats
+        self.include_std = FeatureStatType.STD in ftrs_stats
+        self.include_correlations = FeatureStatType.CORRELATIONS in ftrs_stats
+        if ftrs_stats_source is None:
+            ftrs_stats_source = PretrainedVGGSource(input_norm_tf=input_norm_tf,
+                                                    device=device)
+        self.ftrs_stats_source = ftrs_stats_source
+        self.linear = None
+
+        if (out_ftrs is not None) or self.include_correlations:
             with torch.no_grad():
-                test_out = self.ftrs_calc.calc_style(torch.rand(1, in_ch, in_sz, in_sz, device=device))
-            n_total_ftrs = sum([ftrs.shape[1] for ftrs in test_out])
-            from torch.nn.utils import spectral_norm
-            lin_in_ftrs = (n_total_ftrs * 2) if include_std else n_total_ftrs
+                test_out = self.ftrs_stats_source.get_ftrs(torch.rand(1, in_ch, in_sz, in_sz, device=device))
+            n_total_ftrs = sum([ftrs.shape[1] for ftrs in test_out])          
+
+        if out_ftrs is not None:
+            lin_in_ftrs = 0
+            if self.include_mean: lin_in_ftrs += n_total_ftrs 
+            if self.include_std: lin_in_ftrs += n_total_ftrs
+            if self.include_correlations: lin_in_ftrs += n_total_ftrs
             self.linear = spectral_norm(nn.Linear(lin_in_ftrs, out_ftrs))
-        else:
-            self.linear = None
+
+        if self.include_correlations:
+            corr_lin_in_ftrs = sum([((ftrs.shape[1]**2 - ftrs.shape[1]) // 2) for ftrs in test_out]) 
+            #corr_lin_in_ftrs = (n_total_ftrs**2 - n_total_ftrs) // 2
+            self.correlations_linear = spectral_norm(nn.Linear(corr_lin_in_ftrs, n_total_ftrs))
           
     def forward(self, x):
-        ftrs_by_layer = self.ftrs_calc.calc_style(x)
-        means = [ftrs.mean(axis=(2, 3)) for ftrs in ftrs_by_layer]
+        ftrs_by_layer = self.ftrs_stats_source.get_ftrs(x)
+        ftrs_stats_by_layer = []
+        if self.include_mean:
+            means = [ftrs.mean(axis=(2, 3)) for ftrs in ftrs_by_layer]
+            ftrs_stats_by_layer.extend(means)
         if self.include_std:
             stds = [ftrs.std(axis=(2, 3)) for ftrs in ftrs_by_layer]
-            ftrs_stats_by_layer = means + stds
-        else:
-            ftrs_stats_by_layer = means
+            ftrs_stats_by_layer.extend(stds)
+        if self.include_correlations:
+            correlations = [vectorize_upper_diag(gram_matrix(ftrs), offset=1) 
+                            for ftrs in ftrs_by_layer]
+            correlations_reduced = self.correlations_linear(torch.cat(correlations, axis=1))
+            ftrs_stats_by_layer.append(correlations_reduced)
         out = torch.cat(ftrs_stats_by_layer, axis=1)
         if self.linear is not None: 
             out = self.linear(out)

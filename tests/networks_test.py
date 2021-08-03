@@ -1,6 +1,8 @@
+from fastai.layers import ResBlock
 from face2anime.layers import (ConcatPoolHalfDownsamplingOp2d, CondConvX2UpsamplingOp2d, 
                                CondInterpConvUpsamplingOp2d, ConvHalfDownsamplingOp2d, 
-                               ConvX2UpsamplingOp2d, InterpConvUpsamplingOp2d)
+                               ConvX2UpsamplingOp2d, FeatureStatType, InterpConvUpsamplingOp2d, 
+                               ParentNetSource, ResBlockDown)
 from face2anime.networks import (basic_encoder, CondResGenerator, custom_generator, 
                                  Img2ImgGenerator, NoiseSplitDontSplitStrategy, 
                                  NoiseSplitEqualLeave1stOutStrategy, patch_res_critic,
@@ -132,26 +134,30 @@ def test_old_patch_res_critic(in_sz, n_ch, n_ftrs, out_sz):
 @pytest.mark.parametrize("in_sz", [32, 64])
 @pytest.mark.parametrize("n_ftrs", [16, 32])
 @pytest.mark.parametrize("out_sz", [4, 8])
-@pytest.mark.parametrize("include_meanstd_layer", [True, False])
-def test_patch_res_critic(in_sz, n_ftrs, out_sz, include_meanstd_layer):
+@pytest.mark.parametrize("ftrs_stats", 
+                         [FeatureStatType.NONE, 
+                          FeatureStatType.MEAN, 
+                          FeatureStatType.STD | FeatureStatType.CORRELATIONS])
+def test_patch_res_critic(in_sz, n_ftrs, out_sz, ftrs_stats):
     n_ch = 3
     down_op = ConvHalfDownsamplingOp2d()
     id_down_op = ConcatPoolHalfDownsamplingOp2d()
     crit_args = [in_sz, n_ch, out_sz, down_op, id_down_op]
+    ftrs_stats_source = ParentNetSource(layer_types=(ResBlock, ResBlockDown))
     crit = PatchResCritic(*crit_args, n_features=n_ftrs, flatten_full=False,
-                          include_meanstd_layer=include_meanstd_layer)
+                          ftrs_stats=ftrs_stats, ftrs_stats_source=ftrs_stats_source)
     crit_flat_out = PatchResCritic(*crit_args, n_features=n_ftrs, flatten_full=True,
-                                   include_meanstd_layer=include_meanstd_layer)
+                                   ftrs_stats=ftrs_stats, ftrs_stats_source=ftrs_stats_source)
 
     bs = randint(1, 5)
     in_t = torch.rand(bs, n_ch, in_sz, in_sz)
     out = crit(in_t)
     flat_out = crit_flat_out(in_t)
-    meanstd_mult = 2 if include_meanstd_layer else 1
+    stats_mult = 2 if ftrs_stats != FeatureStatType.NONE else 1
 
     assert every_conv_has_sn(crit)
-    assert out.size() == torch.Size([bs, out_sz**2 * meanstd_mult])
-    assert flat_out.size() == torch.Size([bs * out_sz**2 * meanstd_mult])
+    assert out.size() == torch.Size([bs, out_sz**2 * stats_mult])
+    assert flat_out.size() == torch.Size([bs * out_sz**2 * stats_mult])
 
 
 @pytest.mark.parametrize("in_sz", [32, 64])

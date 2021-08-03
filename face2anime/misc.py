@@ -6,7 +6,7 @@ from torchvision.models.vgg import vgg19
 from typing import List, Tuple
 
 
-__all__ = ['FeaturesCalculator']
+__all__ = ['FeaturesCalculator', 'gram_matrix']
 
 
 class FeaturesCalculator:
@@ -55,3 +55,24 @@ class FeaturesCalculator:
     
     def __del__(self):
         self.hooks.remove()
+
+
+def gram_matrix(ftr_maps, cosine_similarity=False):
+    bs, n_ftrs, h, w = ftr_maps.size() 
+    eps = 1e-8
+    # Code is split depending on bs for efficiency
+    # When bs == 1, tensor.t() seems faster than torch.transpose
+    if bs == 1:
+        flat_ftrs = ftr_maps.view(n_ftrs, h * w)
+        result = torch.mm(flat_ftrs, flat_ftrs.t())
+        if cosine_similarity:
+            norms = flat_ftrs.norm(dim=1)
+            result = result / (torch.mm(norms.view(-1, 1), norms.view(1, -1)) + eps)
+        result = result[None]
+    else:
+        flat_ftrs = ftr_maps.view(bs, n_ftrs, h * w)
+        result = torch.bmm(flat_ftrs, torch.transpose(flat_ftrs, 1, 2))
+        if cosine_similarity:
+            norms = flat_ftrs.norm(dim=2)
+            result = result / (torch.bmm(norms.view(bs, -1, 1), norms.view(bs, 1, -1)) + eps)
+    return result
