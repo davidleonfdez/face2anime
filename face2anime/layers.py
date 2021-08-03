@@ -166,7 +166,8 @@ class ParentNetSource(FeaturesStatsSource):
 class FeaturesStats(nn.Module):
     "Returns statistics from intermediate feature maps obtained when forwarding input through a certain network."
     def __init__(self, in_sz, in_ch, out_ftrs=None, input_norm_tf=None, device=None,
-                 ftrs_stats=FeatureStatType.MEAN, ftrs_stats_source:FeaturesStatsSource=None):
+                 ftrs_stats=FeatureStatType.MEAN, ftrs_stats_source:FeaturesStatsSource=None,
+                 max_corr_in_ftrs=256):
         super().__init__()
         assert ftrs_stats not in (None, FeatureStatType.NONE)
         self.include_mean = FeatureStatType.MEAN in ftrs_stats
@@ -191,7 +192,10 @@ class FeaturesStats(nn.Module):
             self.linear = spectral_norm(nn.Linear(lin_in_ftrs, out_ftrs))
 
         if self.include_correlations:
-            corr_lin_in_ftrs = sum([((ftrs.shape[1]**2 - ftrs.shape[1]) // 2) for ftrs in test_out]) 
+            self.corr_ftrs_layers_idxs = [i for i, ftrs in enumerate(test_out) 
+                                          if ftrs.shape[1] <= max_corr_in_ftrs]
+            corr_lin_in_ftrs = sum([((test_out[i].shape[1]**2 - test_out[i].shape[1]) // 2) 
+                                    for i in self.corr_ftrs_layers_idxs]) 
             #corr_lin_in_ftrs = (n_total_ftrs**2 - n_total_ftrs) // 2
             self.correlations_linear = spectral_norm(nn.Linear(corr_lin_in_ftrs, n_total_ftrs))
           
@@ -205,8 +209,8 @@ class FeaturesStats(nn.Module):
             stds = [ftrs.std(axis=(2, 3)) for ftrs in ftrs_by_layer]
             ftrs_stats_by_layer.extend(stds)
         if self.include_correlations:
-            correlations = [vectorize_upper_diag(gram_matrix(ftrs), offset=1) 
-                            for ftrs in ftrs_by_layer]
+            correlations = [vectorize_upper_diag(gram_matrix(ftrs_by_layer[i]), offset=1) 
+                            for i in self.corr_ftrs_layers_idxs]
             correlations_reduced = self.correlations_linear(torch.cat(correlations, axis=1))
             ftrs_stats_by_layer.append(correlations_reduced)
         out = torch.cat(ftrs_stats_by_layer, axis=1)
