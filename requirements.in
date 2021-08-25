@@ -4,3 +4,5 @@ jupyter
 notebook
 jupyter_contrib_nbextensions
 seaborn
+# As of 08/21, installing on Windows from PyPI doesn't work
+# pytorch-fid

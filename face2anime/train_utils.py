@@ -1,10 +1,11 @@
 from fastai.vision.all import *
+import gc
 import torch
 from typing import Callable
 
 
 __all__ = ['EMAAverager', 'EMACallback', 'add_ema_to_gan_learner', 'custom_save_model',
-           'custom_load_model']
+           'custom_load_model', 'SaveCheckpointsCallback', 'clean_mem']
 
 
 class EMAAverager():
@@ -213,3 +214,24 @@ def _save_ema_model(learner, base_path, filename):
     file = join_path_file(filename+'_ema', base_path/learner.model_dir, ext='.pth')
     save_model(file, learner.ema_model, None, with_opt=False)
     #torch.save(file, learner.ema_model.state_dict())    
+
+
+class SaveCheckpointsCallback(Callback):
+    "Callback that saves the model at the end of each epoch."
+    def __init__(self, fn_prefix, base_path=Path('.'), initial_epoch=1,
+                 save_cycle_len=1):
+        self.fn_prefix = fn_prefix
+        self.base_path = base_path
+        self.epoch = initial_epoch
+        self.save_cycle_len = save_cycle_len
+        
+    def after_epoch(self):
+        if (self.epoch % self.save_cycle_len) == 0:
+            fn = f'{self.fn_prefix}_{self.epoch}ep'
+            custom_save_model(self.learn, fn, base_path=self.base_path)
+        self.epoch += 1
+
+
+def clean_mem():
+    if torch.cuda.is_available(): torch.cuda.empty_cache()
+    gc.collect()
