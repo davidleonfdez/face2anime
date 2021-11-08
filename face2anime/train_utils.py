@@ -1,11 +1,14 @@
+from abc import ABC, abstractmethod
 from fastai.vision.all import *
 import gc
 import torch
-from typing import Callable
+from typing import Callable, List
 
 
 __all__ = ['EMAAverager', 'EMACallback', 'add_ema_to_gan_learner', 'custom_save_model',
-           'custom_load_model', 'SaveCheckpointsCallback', 'clean_mem']
+           'custom_load_model', 'EpochFilterAll', 'EpochFilterMultipleOfN', 
+           'EpochFilterAfterN', 'ComposedEpochFilter', 'UpdateEMAPreSaveAction', 
+           'SaveCheckpointsCallback', 'clean_mem']
 
 
 class EMAAverager():
@@ -137,12 +140,15 @@ class EMACallback(Callback):
             self.update_bn_pending = True
             
     def after_fit(self):
+        self.update_bn()
+
+    def update_bn(self):
         if not self.update_bn_pending: return
         #torch.optim.swa_utils.update_bn(self.dl, self.ema_model)
         _update_bn(self.dl, self.ema_model, forward_batch=self.forward_batch)
-        self.update_bn_pending = False
+        self.update_bn_pending = False        
 
-   
+
 def add_ema_to_gan_learner(gan_learner, dblock, decay=0.999, update_bn_dl_bs=64,
                            forward_batch=None):
     """"Creates and setups everything needed to update an alternative EMA generator.
@@ -216,17 +222,73 @@ def _save_ema_model(learner, base_path, filename):
     #torch.save(file, learner.ema_model.state_dict())    
 
 
+class EpochFilter(ABC):
+    "A child class must define a criteria to filter epochs depending on its index"
+    @abstractmethod
+    def contains(self, epoch:int):
+        pass
+
+
+class EpochFilterAll(EpochFilter):
+    def contains(self, epoch: int):
+        return True
+
+
+class EpochFilterMultipleOfN(EpochFilter):
+    def __init__(self, n):
+        self.n = n
+
+    def contains(self, epoch: int):
+        return (epoch % self.n) == 0
+
+
+class EpochFilterAfterN(EpochFilter):
+    def __init__(self, n):
+        self.n = n
+
+    def contains(self, epoch: int):
+        return epoch > self.n
+
+
+class ComposedEpochFilter(EpochFilter):
+    def __init__(self, filters:List[EpochFilter]):
+        self.filters = filters
+
+    def contains(self, epoch: int):
+        return all(filter.contains(epoch) for filter in self.filters)
+
+
+class PreSaveAction(ABC):
+    "Child classes must implement a piece of code to be executed before saving a model at a given epoch."
+    @abstractmethod
+    def before_save(self, epoch):
+        pass
+
+
+class UpdateEMAPreSaveAction(PreSaveAction):
+    def __init__(self, learn, epoch_filter=None):
+        self.ema_cb = first(learn.cbs, f=lambda cb: isinstance(cb, EMACallback))
+        self.epoch_filter = epoch_filter if epoch_filter is not None else EpochFilterAll()
+    
+    def before_save(self, epoch):
+        if self.ema_cb is None: return
+        if self.epoch_filter.contains(epoch):
+            self.ema_cb.update_bn()
+
+
 class SaveCheckpointsCallback(Callback):
     "Callback that saves the model at the end of each epoch."
-    def __init__(self, fn_prefix, base_path=Path('.'), initial_epoch=1,
-                 save_cycle_len=1):
+    def __init__(self, fn_prefix:str, base_path=Path('.'), initial_epoch=1,
+                 save_cycle_len=1, pre_save_actions:List[PreSaveAction]=None):
         self.fn_prefix = fn_prefix
         self.base_path = base_path
         self.epoch = initial_epoch
         self.save_cycle_len = save_cycle_len
+        self.pre_save_actions = pre_save_actions if pre_save_actions is not None else []
         
     def after_epoch(self):
         if (self.epoch % self.save_cycle_len) == 0:
+            for action in self.pre_save_actions: action.before_save(self.epoch)
             fn = f'{self.fn_prefix}_{self.epoch}ep'
             custom_save_model(self.learn, fn, base_path=self.base_path)
         self.epoch += 1
