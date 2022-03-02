@@ -8,7 +8,12 @@ To train a model, follow the steps detailed in [this notebook](notebooks/face2an
 
 To inspect some results, see [this notebook](notebooks/experiments/face2anime-bidirectional-17kds.ipynb).
 
-There are also tools to perform image generation from random noise vectors (traditional GAN problem), even with relatively small datasets, using a simplification of the techniques presented in https://arxiv.org/abs/2006.06676. If you wish to take a look at an example that uses a small anime faces dataset, more centered in the effect of augmentations, see [this notebook](notebooks/experiments/noise2anime-gan.ipynb).
+To optimize a trained model, consider the post-training optimization tools shown in [this notebook](notebooks/inference-optimizations.ipynb)
+
+
+## Unsupervised Image Synthesis
+
+There are also utilities to perform image generation from random noise vectors (traditional GAN problem), even with relatively small datasets, using a simplification of the techniques presented in https://arxiv.org/abs/2006.06676. If you wish to take a look at an example that uses a small anime faces dataset, more centered in the effect of augmentations, see [this notebook](notebooks/experiments/noise2anime-gan.ipynb).
 
 
 ## Installation
